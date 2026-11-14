@@ -5,6 +5,7 @@
 #include "VM/ScriptCall.h"
 #include "VM/Frame.h"
 #include "Packages/Engine/Resources/Mesh/USkeletalMesh.h"
+#include "Packages/Engine/Resources/Mesh/UAnimation.h"
 #include "Engine.h"
 
 bool UActor::HasAnim(const NameString& sequence)
@@ -19,7 +20,7 @@ bool UActor::IsAnimating()
 
 bool UActor::IsAnimating_HP(std::optional<NameString> RootBone)
 {
-	LogUnimplemented("Actor.IsAnimating_HP");
+	// To do: per bone range queries once animation channels exist
 	return IsAnimating();
 }
 
@@ -37,7 +38,7 @@ void UActor::FinishAnim()
 
 void UActor::FinishAnim_HP(std::optional<NameString> RootBone)
 {
-	LogUnimplemented("Actor.FinishAnim_HP");
+	// To do: per bone range waits once animation channels exist
 	FinishAnim();
 }
 
@@ -319,12 +320,82 @@ void UActor::TweenAnim(const NameString& sequence, float tweenTime)
 
 void UActor::PlayAnim_HP(const NameString& Sequence, std::optional<float> Rate, std::optional<float> TweenTime, std::optional<EAnimType> Type, std::optional<NameString> RootBone)
 {
-	LogUnimplemented("Actor.PlayAnim_HP");
+	// Partial body playback (a root bone or AT_Combine) needs animation channels, which are not implemented yet.
+	// Until then a combined animation must not knock out the full body animation that is already running.
+	bool partial = (RootBone && !RootBone->IsNone()) || (Type && *Type == EAnimType::AT_Combine);
+	if (partial)
+	{
+		LogUnimplemented("Actor.PlayAnim_HP with a root bone or AT_Combine");
+		if (IsAnimating())
+			return;
+	}
+
+	PlayAnim(Sequence, Rate ? *Rate : 1.0f, TweenTime ? *TweenTime : 0.0f);
 }
 
 void UActor::LoopAnim_HP(const NameString& Sequence, std::optional<float> Rate, std::optional<float> TweenTime, std::optional<float> MinRate, std::optional<EAnimType> Type, std::optional<NameString> RootBone)
 {
-	LogUnimplemented("Actor.LoopAnim_HP");
+	bool partial = (RootBone && !RootBone->IsNone()) || (Type && *Type == EAnimType::AT_Combine);
+	if (partial)
+	{
+		LogUnimplemented("Actor.LoopAnim_HP with a root bone or AT_Combine");
+		if (IsAnimating())
+			return;
+	}
+
+	LoopAnim(Sequence, Rate ? *Rate : 1.0f, TweenTime ? *TweenTime : 0.0f, MinRate ? *MinRate : 0.0f);
+}
+
+mat4 UActor::GetMeshToWorldMatrix()
+{
+	mat4 objectToWorld = mat4::translate(Location() + PrePivot()) * Coords::Rotation(Rotation()).ToMatrix() * mat4::scale(DrawScale());
+	return Mesh() ? objectToWorld * Mesh()->meshToObject : objectToWorld;
+}
+
+// Current bone transforms of a skeletal mesh actor, including the tween from the previous animation
+bool UActor::GetSkeletalPose(SkeletalPose& pose)
+{
+	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
+	if (!mesh)
+		return false;
+
+	UAnimation* anim = (engine->LaunchInfo.IsHarryPotter1() && SkelAnim()) ? SkelAnim() : mesh->DefaultAnimation;
+	int move = anim ? anim->FindMove(AnimSequence()) : -1;
+	if (move < 0)
+	{
+		mesh->GetRefPose(pose);
+		return true;
+	}
+
+	const MeshAnimSeq& seq = anim->AnimSeqs[move];
+	float rate = seq.Rate > 0.0f ? seq.Rate : 30.0f;
+	float animFrame = AnimFrame();
+	if (animFrame >= 0.0f)
+	{
+		mesh->GetAnimPose(anim, move, animFrame * seq.NumFrames / rate, pose);
+	}
+	else
+	{
+		// Tweening from the pose the previous animation was left in to the first frame of this one
+		mesh->GetAnimPose(anim, move, 0.0f, pose);
+		if (SkelTweenRotations.size() == pose.Rotations.size() && SkelTweenPositions.size() == pose.Positions.size())
+		{
+			SkeletalPose target = std::move(pose);
+			pose.Rotations = SkelTweenRotations;
+			pose.Positions = SkelTweenPositions;
+			USkeletalMesh::BlendPose(pose, target, clamp(animFrame * seq.NumFrames + 1.0f, 0.0f, 1.0f));
+		}
+	}
+	return true;
+}
+
+bool UActor::GetSkeletalBoneMatrices(Array<mat4>& bones)
+{
+	SkeletalPose pose;
+	if (!GetSkeletalPose(pose))
+		return false;
+	UObject::Cast<USkeletalMesh>(Mesh())->GetBoneMatrices(pose, bones);
+	return true;
 }
 
 void UActor::TickAnimation(float elapsed)
@@ -532,6 +603,16 @@ void UActor::TickBlendAnimation(float elapsed)
 
 void UActor::SetTweenFromAnimFrame()
 {
+	if (UObject::TryCast<USkeletalMesh>(Mesh()))
+	{
+		SkeletalPose pose;
+		if (GetSkeletalPose(pose))
+		{
+			SkelTweenRotations = std::move(pose.Rotations);
+			SkelTweenPositions = std::move(pose.Positions);
+		}
+	}
+
 	if (Mesh())
 	{
 		MeshAnimSeq* seq = Mesh()->GetSequence(AnimSequence());
@@ -600,20 +681,28 @@ UActor* UActor::CreateAnimChannel(UClass* NewClass, EAnimType Type, const NameSt
 
 int UActor::BoneNumber(const NameString& Bone)
 {
-	LogUnimplemented("Actor.BoneNumber");
-	return 0;
+	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
+	return mesh ? mesh->FindBone(Bone) : -1;
 }
 
 NameString UActor::BoneName(int Bone)
 {
-	LogUnimplemented("Actor.BoneName");
+	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
+	if (mesh && Bone >= 0 && (size_t)Bone < mesh->RefSkeleton.size())
+		return mesh->RefSkeleton[Bone].Name;
 	return {};
 }
 
 vec3 UActor::BonePos(const NameString& Bone)
 {
-	LogUnimplemented("Actor.BonePos");
-	return vec3(0.0f);
+	// World location of a bone in the current pose
+	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
+	int index = mesh ? mesh->FindBone(Bone) : -1;
+	Array<mat4> bones;
+	if (index < 0 || !GetSkeletalBoneMatrices(bones))
+		return Location();
+	vec4 p = GetMeshToWorldMatrix() * (bones[index] * vec4(0.0f, 0.0f, 0.0f, 1.0f));
+	return vec3(p.x, p.y, p.z);
 }
 
 UTexture* UActor::GetMultiskin(int index)

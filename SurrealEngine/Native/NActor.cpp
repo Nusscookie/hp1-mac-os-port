@@ -15,6 +15,8 @@
 #include "Packages/Engine/Actors/Info/UZoneInfo.h"
 #include "Packages/Engine/Actors/Info/ULevelInfo.h"
 #include "Package/PackageManager.h"
+#include "Packages/Engine/Resources/Mesh/UAnimation.h"
+#include "Packages/Engine/Resources/Mesh/UMesh.h"
 #include "Engine.h"
 #include "Audio/AudioDevice.h"
 #include "Packages/Engine/Subsystems/USurrealAudioDevice.h"
@@ -474,7 +476,15 @@ void NActor::LastRendered(UObject *Self, float &ReturnValue)
 
 void NActor::LinkSkelAnim(UObject* Self, UObject* Anim)
 {
-	LogUnimplemented("Actor.LinkSkelAnim");
+	UActor* SelfActor = UObject::Cast<UActor>(Self);
+	UAnimation* animation = UObject::TryCast<UAnimation>(Anim);
+	if (animation)
+		animation->LoadNow();
+	SelfActor->SkelAnim() = animation;
+
+	// Sequence lookups go through the mesh, so a mesh without its own animation takes the linked one's sequences
+	if (animation && SelfActor->Mesh() && SelfActor->Mesh()->AnimSeqs.empty())
+		SelfActor->Mesh()->AnimSeqs = animation->AnimSeqs;
 }
 
 void NActor::LoopAnim(UObject* Self, const NameString& Sequence, std::optional<float> Rate, std::optional<float> TweenTime, std::optional<float> MinRate)

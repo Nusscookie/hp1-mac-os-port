@@ -4,6 +4,16 @@
 #include "Utils/SHA1Sum.h"
 #include <iostream>
 
+// Fallback detection for installs without a recognised Windows executable.
+// The original HP1 disc ships a copy-protected HP.exe that is neither needed nor hashed here.
+static std::pair<KnownUE1Games, std::string> FindUE1GameByPackages(const fs::path& systemPath)
+{
+	if (fs::exists(systemPath / "HPBase.u") && fs::exists(systemPath / "HarryPotter.u") && fs::exists(systemPath / "HPMenu.u"))
+		return std::make_pair(KnownUE1Games::HARRYPOTTER1_433, "HP.exe");
+
+	return std::make_pair(KnownUE1Games::UE1_GAME_NOT_FOUND, "");
+}
+
 std::pair<KnownUE1Games, std::string> FindUE1GameInPath(const std::string& ue1_game_root_folder_path)
 {
 	if (ue1_game_root_folder_path.empty())
@@ -31,7 +41,7 @@ std::pair<KnownUE1Games, std::string> FindUE1GameInPath(const std::string& ue1_g
 		const auto it = !sha1sum64.empty() ? SHA1Database.find(sha1sum64) : SHA1Database.find(sha1sum);
 		
 		if (it == SHA1Database.end())
-			return std::make_pair(KnownUE1Games::UE1_GAME_NOT_FOUND, "");
+			return FindUE1GameByPackages(UE1GameSystemPath);
 
 		// Hack: Tactical-Ops has a version that contains the exact same UTv469d executable. Handle that here
 		if (it->second == KnownUE1Games::UT99_469d && executable_name == "TacticalOps.exe")
@@ -39,6 +49,6 @@ std::pair<KnownUE1Games, std::string> FindUE1GameInPath(const std::string& ue1_g
 		return std::make_pair(it->second, executable_name);
 	}
 
-	// We got nothing here
-	return std::make_pair(KnownUE1Games::UE1_GAME_NOT_FOUND, "");
+	// No executable at all (data copied straight from the disc). Identify the game by its script packages.
+	return FindUE1GameByPackages(UE1GameSystemPath);
 }

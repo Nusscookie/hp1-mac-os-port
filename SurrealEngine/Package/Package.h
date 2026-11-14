@@ -28,6 +28,7 @@ public:
 	UClass* GetClass(const NameString& className);
 
 	void LoadAll();
+	int GetExportCount() const { return (int)ExportTable.size(); }
 	void Save(UObject* object = nullptr, const std::string& filename = {});
 
 	const NameString& GetName(int index) const;

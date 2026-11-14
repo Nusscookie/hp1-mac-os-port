@@ -10,6 +10,7 @@
 #include "PropertyOffsets.h"
 #include "GC/GC.h"
 #include <set>
+#include <map>
 #include <optional>
 
 class UObject;
@@ -270,6 +271,11 @@ public:
 	virtual ~UObject();
 
 	void LoadNow();
+
+	// Load verification, enabled by --loadall
+	struct UnreadInfo { int Count = 0; std::string Example; };
+	static bool CheckLoadedSize;
+	static std::map<std::string, UnreadInfo> UnreadObjects;
 	virtual void Load(ObjectStream* stream);
 	virtual void Save(PackageStreamWriter* stream);
 

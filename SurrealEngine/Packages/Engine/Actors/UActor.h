@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Math/quaternion.h"
 #include "Packages/Core/UObject.h"
 #include "Math/bbox.h"
 
@@ -595,6 +596,13 @@ public:
 	void RemoveChildActor(UActor* actor);
 
 	void SetTweenFromAnimFrame();
+
+	// Skeletal animation (Harry Potter 1). The pose an animation tween starts from is kept per actor.
+	Array<quaternion> SkelTweenRotations;
+	Array<vec3> SkelTweenPositions;
+	bool GetSkeletalPose(struct SkeletalPose& pose);
+	bool GetSkeletalBoneMatrices(Array<mat4>& bones);
+	mat4 GetMeshToWorldMatrix();
 	void SetTweenFromBlendAnimFrame(int slot);
 
 	UTexture* GetMultiskin(int index);

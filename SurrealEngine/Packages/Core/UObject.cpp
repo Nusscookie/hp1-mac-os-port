@@ -22,6 +22,9 @@ UObject::~UObject()
 {
 }
 
+bool UObject::CheckLoadedSize = false;
+std::map<std::string, UObject::UnreadInfo> UObject::UnreadObjects;
+
 void UObject::LoadNow()
 {
 	if (DelayLoad)
@@ -32,6 +35,15 @@ void UObject::LoadNow()
 		{
 			Load(stream.get());
 			SetObject("Outer", info->Outer);
+
+			// Load verification (--loadall): a loader that leaves bytes behind does not understand the format
+			if (CheckLoadedSize && stream->BytesLeft() != 0)
+			{
+				std::string clsname = Class ? Class->Name.ToString() : std::string("Class");
+				UnreadObjects[clsname].Count++;
+				if (UnreadObjects[clsname].Example.empty())
+					UnreadObjects[clsname].Example = info->package->GetPackageName().ToString() + "." + Name.ToString() + " (" + std::to_string(stream->BytesLeft()) + " of " + std::to_string(stream->GetSize()) + " bytes unread)";
+			}
 		}
 		else if (auto s = UObject::TryCast<UStruct>(this))
 		{

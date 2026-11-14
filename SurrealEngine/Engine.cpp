@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "Engine.h"
+#include "Utils/CommandLine.h"
 #include "Utils/File.h"
 #include "Utils/StrTools.h"
 #include "Utils/SHA1Sum.h"
@@ -28,6 +29,7 @@
 #include "Packages/Engine/Resources/Level/UModel.h"
 #include "Packages/Engine/Resources/UFont.h"
 #include "Packages/Engine/Resources/Mesh/USkeletalMesh.h"
+#include "Packages/Engine/Resources/Mesh/UAnimation.h"
 #include "Packages/Engine/Resources/Textures/UTexture.h"
 #include "Packages/Engine/Resources/UMusic.h"
 #include "Packages/Engine/Resources/USound.h"
@@ -60,6 +62,7 @@
 #include "Video/VideoPlayer.h"
 #include "Utils/Convert.h"
 #include <chrono>
+#include <iostream>
 #include <set>
 
 Engine* engine = nullptr;
@@ -115,6 +118,219 @@ Engine::~Engine()
 	engine = nullptr;
 }
 
+// Writes the last rendered frame as a 24 bit BMP, box filtered down to at most 1280 pixels wide.
+void Engine::SaveScreenshotBMP(const std::string& filename)
+{
+	int width = window->GetPixelWidth();
+	int height = window->GetPixelHeight();
+	if (width <= 0 || height <= 0)
+		return;
+
+	std::vector<TextureColor> pixels((size_t)width * height);
+	window->GetRenderDevice()->ReadPixels(pixels.data());
+
+	int scale = std::max((width + 1279) / 1280, 1);
+	int outWidth = width / scale;
+	int outHeight = height / scale;
+	int pitch = (outWidth * 3 + 3) & ~3;
+
+	std::vector<uint8_t> file(54 + (size_t)pitch * outHeight);
+	auto put32 = [&](size_t offset, uint32_t value) { memcpy(file.data() + offset, &value, 4); };
+	file[0] = 'B'; file[1] = 'M';
+	put32(2, (uint32_t)file.size());
+	put32(10, 54);
+	put32(14, 40);
+	put32(18, (uint32_t)outWidth);
+	put32(22, (uint32_t)outHeight);
+	file[26] = 1; file[28] = 24;
+	put32(34, (uint32_t)(pitch * outHeight));
+
+	for (int y = 0; y < outHeight; y++)
+	{
+		uint8_t* dest = file.data() + 54 + (size_t)pitch * (outHeight - 1 - y);
+		for (int x = 0; x < outWidth; x++)
+		{
+			uint32_t r = 0, g = 0, b = 0;
+			for (int sy = 0; sy < scale; sy++)
+			{
+				const TextureColor* src = &pixels[(size_t)(y * scale + sy) * width + x * scale];
+				for (int sx = 0; sx < scale; sx++)
+				{
+					r += src[sx].R; g += src[sx].G; b += src[sx].B;
+				}
+			}
+			uint32_t n = scale * scale;
+			dest[x * 3 + 0] = (uint8_t)(b / n);
+			dest[x * 3 + 1] = (uint8_t)(g / n);
+			dest[x * 3 + 2] = (uint8_t)(r / n);
+		}
+	}
+
+	File::write_all_bytes(filename, file.data(), file.size());
+}
+
+// --dumpmesh=Package.MeshName prints the skinning data layout of one skeletal mesh
+void Engine::DumpSkeletalMesh()
+{
+	std::string dumpMesh = commandline->GetArg("", "--dumpmesh", "");
+	size_t dot = dumpMesh.find('.');
+	if (dot != std::string::npos)
+	{
+		auto mesh = UObject::TryCast<USkeletalMesh>(packages->GetPackage(dumpMesh.substr(0, dot))->GetUObject("SkeletalMesh", dumpMesh.substr(dot + 1)));
+		if (mesh)
+		{
+			std::cerr << "mesh " << dumpMesh << ": Verts=" << mesh->Verts.size() << " FrameVerts=" << mesh->FrameVerts << " AnimFrames=" << mesh->AnimFrames << " AnimSeqs=" << mesh->AnimSeqs.size()
+				<< " Tris=" << mesh->Tris.size() << " Faces=" << mesh->Faces.size() << " Wedges=" << mesh->Wedges.size() << " Materials=" << mesh->Materials.size() << " SpecialFaces=" << mesh->SpecialFaces.size()
+				<< " ModelVerts=" << mesh->ModelVerts << " SpecialVerts=" << mesh->SpecialVerts << " Textures=" << mesh->Textures.size() << std::endl;
+			std::cerr << " ExtWedges=" << mesh->ExtWedges.size() << " Points=" << mesh->Points.size() << " RefSkeleton=" << mesh->RefSkeleton.size() << " BoneWeightIndices=" << mesh->BoneWeightIndices.size()
+				<< " BoneWeights=" << mesh->BoneWeights.size() << " LocalPoints=" << mesh->LocalPoints.size() << " SkeletalDepth=" << mesh->SkeletalDepth << " DefaultAnimation=" << (mesh->DefaultAnimation ? mesh->DefaultAnimation->Name.ToString() : "null")
+				<< " Scale=" << mesh->Scale.x << "," << mesh->Scale.y << "," << mesh->Scale.z << " Origin=" << mesh->Origin.x << "," << mesh->Origin.y << "," << mesh->Origin.z
+				<< " RotOrigin=" << mesh->RotOrigin.Pitch << "," << mesh->RotOrigin.Yaw << "," << mesh->RotOrigin.Roll << std::endl;
+			// Bind pose check: which quaternion convention reproduces Points from LocalPoints?
+			for (int variant = 0; variant < 4; variant++)
+			{
+				bool conjugate = (variant & 1) != 0;
+				bool conjugateRoot = (variant & 2) != 0;
+				Array<mat4> bones(mesh->RefSkeleton.size());
+				for (size_t i = 0; i < mesh->RefSkeleton.size(); i++)
+				{
+					const auto& b = mesh->RefSkeleton[i];
+					bool conj = (i == 0) ? (conjugate != conjugateRoot) : conjugate;
+					mat4 local = mat4::translate(b.Position) * (conj ? mat4::quaternion(-b.Orientation.x, -b.Orientation.y, -b.Orientation.z, b.Orientation.w) : mat4::quaternion(b.Orientation.x, b.Orientation.y, b.Orientation.z, b.Orientation.w));
+					bones[i] = (i == 0) ? local : bones[b.ParentIndex] * local;
+				}
+				Array<vec3> verts(mesh->Points.size(), vec3(0.0f));
+				for (size_t b = 0; b < mesh->BoneWeightIndices.size(); b++)
+				{
+					const auto& idx = mesh->BoneWeightIndices[b];
+					for (int w = idx.WeightIndex; w < idx.WeightIndex + idx.Number; w++)
+					{
+						vec4 p = bones[b] * vec4(mesh->LocalPoints[w], 1.0f);
+						verts[mesh->BoneWeights[w].PointIndex] += vec3(p.x, p.y, p.z) * (mesh->BoneWeights[w].BoneWeight / 65535.0f);
+					}
+				}
+				float maxError = 0.0f;
+				for (size_t i = 0; i < verts.size(); i++)
+					maxError = std::max(maxError, length(verts[i] - mesh->Points[i]));
+				std::cerr << " bind pose variant conjugate=" << conjugate << " conjugateRoot=" << conjugateRoot << ": max error " << maxError << std::endl;
+			}
+
+			for (size_t i = 0; i < mesh->RefSkeleton.size() && i < 8; i++)
+			{
+				const auto& b = mesh->RefSkeleton[i];
+				std::cerr << "  bone " << i << " " << b.Name.ToString() << " parent=" << b.ParentIndex << " children=" << b.NumChildren << " flags=" << b.Flags << " q=(" << b.Orientation.x << "," << b.Orientation.y << "," << b.Orientation.z << "," << b.Orientation.w << ") pos=(" << b.Position.x << "," << b.Position.y << "," << b.Position.z << ") len=" << b.Length << std::endl;
+			}
+			// First keys of a few sequences next to the reference pose, to compare conventions
+			if (UAnimation* anim = mesh->DefaultAnimation)
+			{
+				std::cerr << " animation " << anim->Name.ToString() << ": RefBones=" << anim->RefBones.size() << " Moves=" << anim->Moves.size() << " AnimSeqs=" << anim->AnimSeqs.size() << std::endl;
+				std::string wanted = commandline->GetArg("", "--dumpseq", "");
+				for (size_t m = 0; m < anim->Moves.size() && m < anim->AnimSeqs.size(); m++)
+				{
+					const auto& seq = anim->AnimSeqs[m];
+					bool show = wanted.empty() ? m < 2 : NameString(wanted) == seq.Name;
+					if (wanted == "list")
+						std::cerr << "  seq " << seq.Name.ToString() << " group=" << seq.Group.ToString() << " frames=" << seq.NumFrames << " rate=" << seq.Rate << " notifys=" << seq.Notifys.size() << std::endl;
+					if (!show)
+						continue;
+					const auto& move = anim->Moves[m];
+					std::cerr << "  seq " << seq.Name.ToString() << " frames=" << seq.NumFrames << " rate=" << seq.Rate << " tracktime=" << move.TrackTime << " tracks=" << move.AnimTracks.size() << " boneindices=" << move.BoneIndices.size() << " rootspeed=" << move.RootSpeed3D.x << "," << move.RootSpeed3D.y << "," << move.RootSpeed3D.z << std::endl;
+					for (size_t i = 0; i < mesh->RefSkeleton.size() && i < 6; i++)
+					{
+						int animBone = anim->FindBone(mesh->RefSkeleton[i].Name);
+						if (animBone < 0 || (size_t)animBone >= move.AnimTracks.size())
+							continue;
+						const auto& track = move.AnimTracks[animBone];
+						std::cerr << "   bone " << i << " (anim bone " << animBone << ") keys q/p/t=" << track.KeyQuat.size() << "/" << track.KeyPos.size() << "/" << track.KeyTime.size();
+						for (size_t k = 0; k < track.KeyQuat.size() && k < 3; k++)
+							std::cerr << " q" << k << "=(" << track.KeyQuat[k].x << "," << track.KeyQuat[k].y << "," << track.KeyQuat[k].z << "," << track.KeyQuat[k].w << ")";
+						if (!track.KeyPos.empty())
+							std::cerr << " p0=(" << track.KeyPos[0].x << "," << track.KeyPos[0].y << "," << track.KeyPos[0].z << ")";
+						std::cerr << std::endl;
+					}
+				}
+			}
+
+			for (size_t i = 0; i < mesh->BoneWeightIndices.size() && i < 8; i++)
+			{
+				const auto& w = mesh->BoneWeightIndices[i];
+				std::cerr << "  weightidx " << i << " WeightIndex=" << w.WeightIndex << " Number=" << w.Number << " DetailA=" << w.DetailA << " DetailB=" << w.DetailB << std::endl;
+			}
+			for (size_t i = 0; i < mesh->BoneWeights.size() && i < 12; i++)
+				std::cerr << "  weight " << i << " PointIndex=" << mesh->BoneWeights[i].PointIndex << " BoneWeight=" << mesh->BoneWeights[i].BoneWeight << " local=(" << mesh->LocalPoints[i].x << "," << mesh->LocalPoints[i].y << "," << mesh->LocalPoints[i].z << ")" << std::endl;
+			for (size_t i = 0; i < mesh->Points.size() && i < 6; i++)
+				std::cerr << "  point " << i << " (" << mesh->Points[i].x << "," << mesh->Points[i].y << "," << mesh->Points[i].z << ")" << std::endl;
+			for (size_t i = 0; i < mesh->ExtWedges.size() && i < 4; i++)
+				std::cerr << "  extwedge " << i << " Vertex=" << mesh->ExtWedges[i].Vertex << " Flags=" << mesh->ExtWedges[i].Flags << " UV=" << mesh->ExtWedges[i].U << "," << mesh->ExtWedges[i].V << std::endl;
+			for (size_t i = 0; i < mesh->Faces.size() && i < 4; i++)
+				std::cerr << "  face " << i << " " << mesh->Faces[i].Indices[0] << "," << mesh->Faces[i].Indices[1] << "," << mesh->Faces[i].Indices[2] << " mat=" << mesh->Faces[i].MaterialIndex << std::endl;
+			for (size_t i = 0; i < mesh->Wedges.size() && i < 4; i++)
+				std::cerr << "  wedge " << i << " Vertex=" << mesh->Wedges[i].Vertex << " UV=" << (int)mesh->Wedges[i].U << "," << (int)mesh->Wedges[i].V << std::endl;
+		}
+		else
+		{
+			std::cerr << "mesh " << dumpMesh << " not found" << std::endl;
+		}
+	}
+}
+
+// Deserializes every export of every package the game can see and reports what failed to load.
+// Used as a headless regression test for package format support.
+void Engine::LoadAllPackagesTest()
+{
+	UObject::CheckLoadedSize = true;
+
+	int numPackages = 0, numFailedPackages = 0, numFailedObjects = 0;
+	std::map<std::string, std::pair<int, std::string>> failures;
+
+	for (const NameString& name : packages->GetPackageNames())
+	{
+		Package* package = nullptr;
+		try
+		{
+			package = packages->GetPackage(name);
+		}
+		catch (const std::exception& e)
+		{
+			std::cerr << "PACKAGE FAILED " << name.ToString() << ": " << e.what() << std::endl;
+			numFailedPackages++;
+			continue;
+		}
+
+		numPackages++;
+		for (int objref = 1; objref <= package->GetExportCount(); objref++)
+		{
+			try
+			{
+				package->GetUObject(objref);
+			}
+			catch (const std::exception& e)
+			{
+				std::string what = e.what();
+				size_t eol = what.find('\n');
+				if (eol != std::string::npos)
+					what.resize(eol);
+				auto& f = failures[what];
+				if (f.first++ == 0)
+					f.second = name.ToString() + "." + package->GetExportName(objref);
+				numFailedObjects++;
+			}
+		}
+	}
+
+	for (const auto& it : failures)
+		std::cerr << "LOAD FAILED x" << it.second.first << ": " << it.first << " (first: " << it.second.second << ")" << std::endl;
+
+	int numUnread = 0;
+	for (const auto& it : UObject::UnreadObjects)
+	{
+		std::cerr << "UNREAD x" << it.second.Count << ": " << it.first << " e.g. " << it.second.Example << std::endl;
+		numUnread += it.second.Count;
+	}
+
+	std::cerr << "loadall: " << numPackages << " packages, " << numFailedPackages << " failed packages, " << numFailedObjects << " failed objects, " << numUnread << " objects with unread bytes" << std::endl;
+}
+
 void Engine::Run()
 {
 	LogMessage("Game: " + LaunchInfo.gameName + " (Version: " + LaunchInfo.gameVersionString + ")");
@@ -123,6 +339,18 @@ void Engine::Run()
 	LoadKeybindings();
 	LogMessage("Loaded key bindings");
 	LogGamePackageSHA1Sums();
+
+	if (commandline->HasArg("", "--dumpmesh"))
+	{
+		DumpSkeletalMesh();
+		return;
+	}
+
+	if (commandline->HasArg("", "--loadall"))
+	{
+		LoadAllPackagesTest();
+		return;
+	}
 
 	OpenWindow();
 
@@ -157,8 +385,15 @@ void Engine::Run()
 
 	float currentZoneTimeDilation = 1.0f; // Unreal 227 allows zones to specify their own time dilations
 
+	// Smoke testing: stop after a fixed number of frames
+	const int maxTicks = commandline->GetArgInt("", "--maxticks", 0);
+	int tickCount = 0;
+
 	while (!quit)
 	{
+		if (maxTicks > 0 && ++tickCount > maxTicks)
+			break;
+
 		// Main game loop should consist of these 4 steps:
 		// Tick everything
 		// Render the scene
@@ -237,6 +472,13 @@ void Engine::Run()
 
 		viewport->SetViewportRect(0, 0, engine->window->GetPixelWidth(), engine->window->GetPixelHeight());
 		render->DrawGame(levelElapsed);
+
+		if (maxTicks > 0 && tickCount == maxTicks)
+		{
+			std::string screenshotFile = commandline->GetArg("", "--screenshot", "");
+			if (!screenshotFile.empty())
+				SaveScreenshotBMP(screenshotFile);
+		}
 
 		// Save the game if there is a request for it
 		if (SaveGameInfo.SaveGameSlot != DONT_SAVE_GAME)

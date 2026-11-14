@@ -28,6 +28,8 @@ public:
 	}
 
 	bool IsEmptyStream() const { return size == 0; }
+	size_t BytesLeft() const { return size - pos; }
+	size_t GetSize() const { return size; }
 
 	int8_t ReadInt8() { int8_t t; ReadBytes(&t, 1); return t; }
 	int16_t ReadInt16() { int16_t t; ReadBytes(&t, 2); return t; }

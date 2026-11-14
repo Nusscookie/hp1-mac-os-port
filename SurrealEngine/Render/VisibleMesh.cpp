@@ -428,7 +428,7 @@ void VisibleMesh::FindAttachmentPoints(ULodMesh* mesh, const mat4& ObjectToWorld
 	}
 }
 
-bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* lightLocationActor, ULodMesh* mesh, const Array<MeshFace>& faces, const mat4& ObjectToWorld, const mat3& ObjectNormalToWorld, float scale, int baseVertexOffset, const int* vertexOffsets, float t0, float t1, bool translucentPass)
+bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* lightLocationActor, ULodMesh* mesh, const Array<MeshFace>& faces, const mat4& ObjectToWorld, const mat3& ObjectNormalToWorld, float scale, int baseVertexOffset, const int* vertexOffsets, float t0, float t1, bool translucentPass, const Array<vec3>* skinnedVerts, const Array<vec3>* skinnedNormals)
 {
 	auto lightsys = &engine->Level->Light;
 	float fatness = actor->Fatness() / 16.0f - 8.0f;
@@ -500,30 +500,43 @@ bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* li
 		{
 			const MeshWedge& wedge = mesh->Wedges[face.Indices[i]];
 
-			size_t vbase = (size_t)wedge.Vertex + baseVertexOffset;
-			size_t vindex = mesh->ReMapAnimVerts.empty() ? vbase : mesh->ReMapAnimVerts[vbase];
-			size_t vindex0 = vindex + vertexOffsets[0];
-			size_t vindex1 = vindex + vertexOffsets[1];
-
-			if (vindex0 >= mesh->Verts.size() || vindex1 >= mesh->Verts.size())
-				return false; // out of bounds
-
-			const vec3& v0 = mesh->Verts[vindex0];
-			const vec3& v1 = mesh->Verts[vindex1];
-			const vec3& n0 = mesh->Normals[vindex0];
-			const vec3& n1 = mesh->Normals[vindex1];
-			vec3 vertex = mix(v0 + n0 * fatness, v1 + n1 * fatness, t0);
-			vec3 normal = mix(n0, n1, t0);
-			if (t1 != 0.0f)
+			vec3 vertex, normal;
+			if (skinnedVerts)
 			{
-				size_t vindex2 = vindex + vertexOffsets[2];
-				if (vindex2 >= mesh->Verts.size())
+				// Skeletal mesh: the vertices were already posed by the caller
+				if (wedge.Vertex >= skinnedVerts->size())
 					return false; // out of bounds
 
-				const vec3& v2 = mesh->Verts[vindex2];
-				const vec3& n2 = mesh->Normals[vindex2];
-				vertex = mix(vertex, v2 + n2 * fatness, t1);
-				normal = mix(normal, n2, t1);
+				normal = (*skinnedNormals)[wedge.Vertex];
+				vertex = (*skinnedVerts)[wedge.Vertex] + normal * fatness;
+			}
+			else
+			{
+				size_t vbase = (size_t)wedge.Vertex + baseVertexOffset;
+				size_t vindex = mesh->ReMapAnimVerts.empty() ? vbase : mesh->ReMapAnimVerts[vbase];
+				size_t vindex0 = vindex + vertexOffsets[0];
+				size_t vindex1 = vindex + vertexOffsets[1];
+
+				if (vindex0 >= mesh->Verts.size() || vindex1 >= mesh->Verts.size())
+					return false; // out of bounds
+
+				const vec3& v0 = mesh->Verts[vindex0];
+				const vec3& v1 = mesh->Verts[vindex1];
+				const vec3& n0 = mesh->Normals[vindex0];
+				const vec3& n1 = mesh->Normals[vindex1];
+				vertex = mix(v0 + n0 * fatness, v1 + n1 * fatness, t0);
+				normal = mix(n0, n1, t0);
+				if (t1 != 0.0f)
+				{
+					size_t vindex2 = vindex + vertexOffsets[2];
+					if (vindex2 >= mesh->Verts.size())
+						return false; // out of bounds
+
+					const vec3& v2 = mesh->Verts[vindex2];
+					const vec3& n2 = mesh->Normals[vindex2];
+					vertex = mix(vertex, v2 + n2 * fatness, t1);
+					normal = mix(normal, n2, t1);
+				}
 			}
 
 			vertices[i].Point = (ObjectToWorld * vec4(vertex, 1.0f)).xyz();
@@ -558,7 +571,22 @@ bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* li
 
 bool VisibleMesh::DrawSkeletalMesh(VisibleFrame* frame, UActor* actor, UActor* lightLocationActor, USkeletalMesh* mesh, const mat4& ObjectToWorld, const mat3& ObjectNormalToWorld, float scale, bool translucentPass)
 {
-	return DrawLodMesh(frame, actor, lightLocationActor, mesh, ObjectToWorld, ObjectNormalToWorld, scale, translucentPass);
+	if (mesh->Points.empty() || mesh->RefSkeleton.empty())
+		return DrawLodMesh(frame, actor, lightLocationActor, mesh, ObjectToWorld, ObjectNormalToWorld, scale, translucentPass);
+
+	UActor* animSource = actor;
+	if (actor->bAnimByOwner() && actor->Owner() && actor->Owner()->Mesh() == mesh)
+		animSource = actor->Owner();
+
+	static Array<mat4> bones;
+	static Array<vec3> verts, normals;
+	if (!animSource->GetSkeletalBoneMatrices(bones))
+		return false;
+	mesh->SkinVertices(bones, verts, normals);
+
+	static const int noVertexOffsets[3] = { 0, 0, 0 };
+	SetupLodMeshTextures(actor, mesh);
+	return DrawLodMeshFace(frame, actor, lightLocationActor, mesh, mesh->Faces, ObjectToWorld, ObjectNormalToWorld, scale, 0, noVertexOffsets, 0.0f, 0.0f, translucentPass, &verts, &normals);
 }
 
 bool VisibleMesh::DrawMeshDX(VisibleFrame* frame, UActor* actor, UActor* lightLocationActor, UMesh* mesh, const mat4& ObjectToWorld, const mat3& ObjectNormalToWorld, float scale, bool translucentPass)

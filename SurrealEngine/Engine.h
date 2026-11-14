@@ -71,6 +71,9 @@ public:
 	~Engine();
 
 	void Run();
+	void SaveScreenshotBMP(const std::string& filename);
+	void LoadAllPackagesTest();
+	void DumpSkeletalMesh();
 	void ClientTravel(const std::string& URL, ETravelType travelType, bool transferItems);
 	UnrealURL GetDefaultURL(const std::string& map);
 	void LoadEntryMap();
