@@ -1,0 +1,8 @@
+gamedata/
+reference/
+build/
+engine/build/
+.DS_Store
+__pycache__/
+*.pyc
+engine/
