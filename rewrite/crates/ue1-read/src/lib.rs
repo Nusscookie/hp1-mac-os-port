@@ -6,6 +6,7 @@
 //! UnrealScript: script bytecode and script text are skipped.
 
 pub mod class;
+pub mod level;
 mod library;
 pub mod mesh;
 mod object;

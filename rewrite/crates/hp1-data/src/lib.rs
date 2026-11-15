@@ -12,6 +12,7 @@
 //! music/<Package>.json          AudioInfo list; files music/<Package>/<Name>.mp2
 //! meshes/<Package>.json         MeshIndexEntry list; files meshes/<Package>/<Name>.mesh (MeshFile)
 //! anims/<Package>/<Name>.anim   AnimFile
+//! levels/<Map>.level            LevelFile (binary); levels/<Map>.json is a readable summary
 //! classes.json                  ClassTable: every class's parent and default values
 //! text/<file>.json              TextFile: localized text and settings (e.g. text/hpdialog.int.json)
 //! ```
@@ -20,6 +21,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+pub mod level;
 pub mod mesh;
 
 /// Bumped whenever a converted file changes shape; the game asks for a re-convert on mismatch.
