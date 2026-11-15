@@ -45,8 +45,8 @@ OpenALAudioDevice::OpenALAudioDevice(int inFrequency, int numVoices, int inMusic
 	if (alcMakeContextCurrent(alContext) == ALC_FALSE)
 		Exception::Throw("Failed to make OpenAL context current");
 
-	// init listener state
-	ALfloat listenerOri[] = { 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, -1.0f };
+	// init listener state: it stays at the origin facing -z with +y up, sources are positioned relative to it
+	ALfloat listenerOri[] = { 0.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f };
 	alListener3f(AL_POSITION, 0, 0, 0.0f);
 	alListener3f(AL_VELOCITY, 0, 0, 0);
 	alListenerfv(AL_ORIENTATION, listenerOri);
@@ -159,7 +159,7 @@ void OpenALAudioDevice::PlaySound(int channel, USound* sound, vec3& location, fl
 	}
 
 	source.SetSound(sound);
-	source.SetPosition(location);
+	source.SetPosition(location, listener);
 	source.SetVolume(volume);
 	source.SetRadius(radius);
 	source.SetPitch(pitch);
@@ -174,7 +174,7 @@ void OpenALAudioDevice::UpdateSound(int channel, vec3& location, float volume, f
 
 	ALSoundSource& source = sources[channel];
 
-	source.SetPosition(location);
+	source.SetPosition(location, listener);
 	source.SetVolume(volume);
 	source.SetRadius(radius);
 	source.SetPitch(pitch);
@@ -273,20 +273,20 @@ void OpenALAudioDevice::SetMusicVolume(float volume)
 
 void OpenALAudioDevice::Update()
 {
-	UActor* listener = engine->CameraActor;
-	if (listener)
+	// The listener stays at the OpenAL origin facing -z; sources are positioned relative to it.
+	if (engine->CameraActor)
 	{
-		// Update listener properties
-		vec3& location = listener->Location();
-		vec3& velocity = listener->Velocity();
+		vec3 forward, right, up;
+		Coords::Rotation(engine->CameraRotation).GetAxes(forward, right, up);
+		listener.location = engine->CameraLocation;
+		listener.forward = forward;
+		listener.right = right;
+	}
 
-		vec3 at, left, up;
-		Coords::Rotation(listener->Rotation()).GetAxes(at, left, up);
-
-		ALfloat listenerOri[6] = { up.x, up.y, -up.z, -at.x, -at.y, at.z };
-		alListener3f(AL_POSITION, location.x, location.y, -location.z);
-		alListener3f(AL_VELOCITY, velocity.x, velocity.y, -velocity.z);
-		alListenerfv(AL_ORIENTATION, listenerOri);
+	for (ALSoundSource& source : sources)
+	{
+		if (source.IsPlaying())
+			source.UpdatePosition(listener);
 	}
 }
 

@@ -1,6 +1,8 @@
 
 #include "Precomp.h"
 #include "ALSoundSource.h"
+#include <algorithm>
+#include <cmath>
 #include "Packages/Engine/Actors/UActor.h"
 #include "Packages/Engine/Resources/USound.h"
 
@@ -11,6 +13,8 @@ ALSoundSource::ALSoundSource()
 		Exception::Throw("Failed to generate AL source");
 
 	alSourcef(id, AL_ROLLOFF_FACTOR, 1.1f);
+	// Positions are given relative to the listener, see UpdatePosition.
+	alSourcei(id, AL_SOURCE_RELATIVE, AL_TRUE);
 }
 
 ALSoundSource::~ALSoundSource()
@@ -56,12 +60,28 @@ void ALSoundSource::SetDopplerFactor(float newDopplerFactor)
 	}
 }
 
-void ALSoundSource::SetPosition(vec3& newPosition)
+void ALSoundSource::SetPosition(const vec3& newPosition, const ALListenerFrame& listener)
 {
-	position.x = newPosition.x;
-	position.y = newPosition.y;
-	position.z = -newPosition.z;
-	alSourcefv(id, AL_POSITION, &position[0]);
+	worldPosition = newPosition;
+	UpdatePosition(listener);
+}
+
+void ALSoundSource::UpdatePosition(const ALListenerFrame& listener)
+{
+	// OpenAL's stereo panning puts anything 60 degrees or more off-center entirely into one ear.
+	// UE1 panned far more gently, so keep the distance (for attenuation) but squeeze the angle:
+	// a sound fully to the side ends up at MaxPanAngle, which plays roughly 75/25 on both channels.
+	const float MaxPanAngle = 25.0f * 3.14159265f / 180.0f;
+	vec3 delta = worldPosition - listener.location;
+	float distance = length(delta);
+	vec3 relative(0.0f);
+	if (distance > 0.001f)
+	{
+		float side = std::clamp(dot(delta, listener.right) / distance, -1.0f, 1.0f);
+		float angle = std::asin(side) * (MaxPanAngle / (3.14159265f * 0.5f));
+		relative = vec3(std::sin(angle) * distance, 0.0f, -std::cos(angle) * distance); // OpenAL: +x right, -z ahead
+	}
+	alSourcefv(id, AL_POSITION, &relative[0]);
 }
 
 void ALSoundSource::SetRadius(float newRadius)

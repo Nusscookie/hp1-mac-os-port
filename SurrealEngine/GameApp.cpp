@@ -12,6 +12,18 @@
 #include "Utils/File.h"
 #include <stdexcept>
 #include <iostream>
+#include "Utils/MacBundle.h"
+
+// Started without arguments from an app bundle (Finder, Dock), boot straight into the bundle's game.
+static void AddBundleGameFolder(Array<std::string>& args)
+{
+	char path[4096];
+	if (!args.empty() || !MacBundleGetGameFolder(path, sizeof(path)))
+		return;
+	MacBundleIgnorePersistentState();
+	args.push_back("--nolauncher");
+	args.push_back(path);
+}
 
 int GameApp::main(Array<std::string> args)
 {
@@ -19,6 +31,8 @@ int GameApp::main(Array<std::string> args)
 
 	// --autostart skips the launcher window, starts the first game found and reports to stderr.
 	bool autostart = false;
+
+	AddBundleGameFolder(args);
 
 	try
 	{
@@ -52,7 +66,7 @@ int GameApp::main(Array<std::string> args)
 			// App bundles pass their game folder and skip the launcher, but keep the normal error windows.
 			GameFolderSelection::UpdateList();
 			if (GameFolderSelection::Games.empty())
-				throw std::runtime_error("No supported game found in the given folder");
+				throw std::runtime_error("No supported game found in " + (commandline->GetItems().empty() ? std::string("the given folder") : commandline->GetItems().front()) + ". If the game data moved, rebuild the app with tools/make_app.sh <new path>.");
 			selectedGameIndex = 0;
 		}
 		else

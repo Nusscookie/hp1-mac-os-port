@@ -8,6 +8,14 @@
 class UActor;
 class USound;
 
+// Where the sounds are heard from, in Unreal coordinates (X forward, Y right, Z up).
+struct ALListenerFrame
+{
+	vec3 location = vec3(0.0f);
+	vec3 forward = vec3(1.0f, 0.0f, 0.0f);
+	vec3 right = vec3(0.0f, 1.0f, 0.0f);
+};
+
 class ALSoundSource
 {
 public:
@@ -19,7 +27,8 @@ public:
 	bool IsPlaying();
 	USound* GetSound();
 	void SetDopplerFactor(float newDopplerFactor);
-	void SetPosition(vec3& newPosition);
+	void SetPosition(const vec3& newPosition, const ALListenerFrame& listener);
+	void UpdatePosition(const ALListenerFrame& listener);
 	void SetRadius(float newRadius);
 	void SetVelocity(vec3& newVelocity);
 	void SetSound(USound* newSound);
@@ -32,7 +41,7 @@ private:
 	ALuint id = -1;
 	UActor* actor = nullptr;
 	USound* sound = nullptr;
-	vec3 position = vec3(0.0f);
+	vec3 worldPosition = vec3(0.0f);
 	vec3 velocity = vec3(0.0f);
 	float radius = 0.0f;
 	float volume = 0.0f;

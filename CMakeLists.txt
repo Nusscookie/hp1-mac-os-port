@@ -58,6 +58,8 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/Utils/File.h
 	SurrealEngine/Utils/Logger.cpp
 	SurrealEngine/Utils/Logger.h
+	SurrealEngine/Utils/MacBundle.c
+	SurrealEngine/Utils/MacBundle.h
 	SurrealEngine/Utils/JsonValue.cpp
 	SurrealEngine/Utils/JsonValue.h
 	SurrealEngine/Utils/SHA1Sum.cpp
@@ -1122,7 +1124,7 @@ if(WIN32)
 elseif(APPLE)
 	set(SURREALCOMMON_SOURCES ${SURREALCOMMON_SOURCES} ${SURREALCOMMON_UNIX_SOURCES})
 	set(THIRDPARTY_SOURCES ${THIRDPARTY_SOURCES} ${THIRDPARTY_UNIX_SOURCES})
-	set(SURREALCOMMON_LIBS ${SURREALCOMMON_LIBS} ${CMAKE_DL_LIBS} OpenAL::OpenAL)
+	set(SURREALCOMMON_LIBS ${SURREALCOMMON_LIBS} ${CMAKE_DL_LIBS} OpenAL::OpenAL "-framework CoreFoundation")
 	add_definitions(-DUNIX -D_UNIX)
 	add_link_options(-pthread)
 elseif(HAIKU)

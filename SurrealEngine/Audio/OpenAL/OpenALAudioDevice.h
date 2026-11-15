@@ -41,6 +41,7 @@ private:
 	ALuint alMusicSource = 0;
 	Array<ALuint> alMusicBuffers;
 	Array<ALSoundSource> sources;
+	ALListenerFrame listener;
 	ALint monoSources = 0;
 	ALint stereoSources = 0;
 

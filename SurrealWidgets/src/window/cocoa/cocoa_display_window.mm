@@ -849,6 +849,11 @@ void CocoaDisplayWindow::SetWindowTitle(const std::string& text)
 
 void CocoaDisplayWindow::SetWindowIcon(const std::vector<std::shared_ptr<Image>>& images)
 {
+    // An app bundle with its own icon (CFBundleIconFile) keeps it in the Dock.
+    id bundleIcon = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIconFile"];
+    if ([bundleIcon isKindOfClass:[NSString class]] && [(NSString*)bundleIcon length] > 0)
+        return;
+
     if (impl->window && !images.empty())
     {
     // For simplicity, use the first image as the icon.

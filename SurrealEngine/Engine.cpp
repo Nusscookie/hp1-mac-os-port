@@ -2072,7 +2072,10 @@ void Engine::OpenWindow()
 
 	std::string versionString = !LaunchInfo.gameVersionString.empty() ? " (v" + LaunchInfo.gameVersionString + ")" : "";
 
-	window->SetWindowTitle(LaunchInfo.gameName + versionString + " - Surreal Engine");
+	if (LaunchInfo.IsHarryPotter1())
+		window->SetWindowTitle("Harry Potter and the Philosopher's Stone");
+	else
+		window->SetWindowTitle(LaunchInfo.gameName + versionString + " - Surreal Engine");
 	window->SetFrameGeometry(Rect::xywh(0.0, 0.0, width, height));
 	viewport->SetViewportRect(0, 0, width, height);
 
