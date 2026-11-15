@@ -7,6 +7,7 @@
 
 pub mod class;
 mod library;
+pub mod mesh;
 mod object;
 mod package;
 mod props;

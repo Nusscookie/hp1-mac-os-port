@@ -5,6 +5,9 @@
 //!   hp1-tools props <package> <object>     an object's property values
 //!   hp1-tools check-data <game folder>     read every package and object property list
 //!   hp1-tools convert <game folder> <out>  write the game in the rewrite's own formats
+//!   hp1-tools render-mesh <converted> <mesh> <out.png> [sequence] [0..1]   software preview
+
+mod preview;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,7 +21,8 @@ const USAGE: &str = "usage:
   hp1-tools exports <package> [class]
   hp1-tools props <package> <object>
   hp1-tools check-data <game folder>
-  hp1-tools convert <game folder> <output folder>";
+  hp1-tools convert <game folder> <output folder>
+  hp1-tools render-mesh <converted folder> <mesh> <out.png> [sequence] [time 0..1]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -28,6 +32,14 @@ fn main() -> ExitCode {
         Some("props") if args.len() == 3 => cmd_props(&args[1], &args[2]),
         Some("check-data") if args.len() == 2 => cmd_check_data(Path::new(&args[1])),
         Some("convert") if args.len() == 3 => cmd_convert(Path::new(&args[1]), Path::new(&args[2])),
+        Some("render-mesh") if (4..=6).contains(&args.len()) => preview::render_mesh(
+            Path::new(&args[1]),
+            &args[2],
+            Path::new(&args[3]),
+            args.get(4).map(String::as_str),
+            args.get(5).and_then(|t| t.parse().ok()).unwrap_or(0.0),
+        )
+        .map(|_| ExitCode::SUCCESS),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

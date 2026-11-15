@@ -1,6 +1,6 @@
 [package]
 name = "hp1-tools"
-description = "Developer tools for the HP1 rewrite: inspect packages, check the installed CD data."
+description = "Developer tools for the HP1 rewrite: inspect packages, convert and check the CD data, preview meshes."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,4 +10,10 @@ publish.workspace = true
 [dependencies]
 ue1-read.workspace = true
 hp1-convert.workspace = true
+hp1-data.workspace = true
+hp1-engine.workspace = true
 anyhow.workspace = true
+glam.workspace = true
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true

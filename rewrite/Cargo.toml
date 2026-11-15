@@ -13,10 +13,13 @@ publish = false
 ue1-read = { path = "crates/ue1-read" }
 hp1-data = { path = "crates/hp1-data" }
 hp1-convert = { path = "crates/hp1-convert" }
+hp1-engine = { path = "crates/hp1-engine" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = "0.18"
 rayon = "1"
+glam = "0.30"
+postcard = { version = "1", features = ["use-std"] }
 anyhow = "1"
 
 [profile.dev]

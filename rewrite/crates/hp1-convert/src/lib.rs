@@ -4,6 +4,7 @@
 
 mod audio;
 mod classes;
+mod meshes;
 mod text;
 mod textures;
 
@@ -14,6 +15,7 @@ use ue1_read::{Library, Package, Props, Value};
 
 pub use audio::convert_audio;
 pub use classes::convert_classes;
+pub use meshes::convert_meshes;
 pub use text::convert_text;
 pub use textures::convert_textures;
 
@@ -37,6 +39,7 @@ impl Converter {
         manifest.sections.insert("textures".into(), convert_textures(self)?);
         manifest.sections.insert("sounds".into(), convert_audio(self, "Sound", "sounds")?);
         manifest.sections.insert("music".into(), convert_audio(self, "Music", "music")?);
+        manifest.sections.insert("meshes".into(), convert_meshes(self)?);
         manifest.sections.insert("classes".into(), convert_classes(self)?);
         manifest.sections.insert("text".into(), convert_text(self, &self.game)?);
         write_json(&self.out.join("manifest.json"), &manifest)?;
