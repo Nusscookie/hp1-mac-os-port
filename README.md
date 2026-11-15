@@ -13,13 +13,27 @@ and is not tracked by this one.
     cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_OSX_ARCHITECTURES=arm64
     cmake --build engine/build --target SurrealEngine -j 10
 
-## Run
+## Play
+
+    tools/make_app.sh            # builds build/HP1.app (icon from the game, data stays in gamedata/)
+    open build/HP1.app           # or drag it to /Applications or the Dock
+
+The app remembers where `gamedata/` is; rebuild it with `tools/make_app.sh <path>` if the data moves.
+Saves go to `gamedata/save/` like the original (`SaveN.usa` plus `GameSaveInfoN.txt`).
+
+## Run from the terminal
 
     engine/build/SurrealEngine.app/Contents/MacOS/SurrealEngine --autostart "$PWD/gamedata"
 
 Options: `--url=<map>` boots straight into a map, `--maxticks=N` quits after N frames,
 `--screenshot=<file.bmp>` saves the last frame, `--loadall` runs the package load test,
-`--dumpmesh=Package.Mesh [--dumpseq=list|<name>]` prints a skeletal mesh's data.
+`--dumpmesh=Package.Mesh [--dumpseq=list|<name>]` prints a skeletal mesh's data,
+`--dumpdefaults=Package.Class` prints a class's default properties, `--nolauncher` skips the game picker.
+
+Scripted input for tests: `--input="tick:action:arg;..."` with actions `press`, `release`, `tap` (key names),
+`click`/`mouse` (window fractions), `rawmouse dx,dy`, `uimouse x,y` (menu cursor in 640x480 menu space),
+`shot <file.bmp>` and `cmd <console command>`. Set `SURREAL_NO_CRASH_WINDOW=1` to get a backtrace on
+stderr instead of the crash window.
 
 ## Tools and tests
 
