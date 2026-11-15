@@ -19,20 +19,33 @@ top: skeletal animation, particle effects, the save system, game-specific functi
 
 ## What you need
 
-- A Mac with macOS 15 or newer (built and tested on Apple Silicon).
+- A Mac with Apple Silicon (M1 or newer) and macOS 15 or newer.
 - The original PC CD. Tested with the European English/French/German edition; other editions should work.
   If your Mac has no disc drive, use a USB CD/DVD drive, or copy the CD's files onto your Mac first.
-- The Xcode command line tools (`xcode-select --install`) and [CMake](https://cmake.org) (`brew install cmake`).
-- An internet connection for the first build (it downloads MoltenVK, the Vulkan-to-Metal layer).
 
-## Build and play
+## Download and play
+
+1. Download `HP1-macOS-AppleSilicon.zip` from the [latest release](https://github.com/Nusscookie/hp1-mac-os-port/releases/latest)
+   and unzip it.
+2. Move `HP1.app` to your Applications folder.
+3. Open it. The app is not signed by an identified Apple developer, so macOS blocks the first launch. Click
+   **Done**, then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
+   (Or run `xattr -dr com.apple.quarantine /Applications/HP1.app` in Terminal.)
+4. Insert your CD and click **Install** (see below).
+
+The download contains no game files, only the engine.
+
+## Build it yourself
+
+You need the Xcode command line tools (`xcode-select --install`), [CMake](https://cmake.org) (`brew install cmake`)
+and an internet connection for the first build (it downloads MoltenVK, the Vulkan-to-Metal layer).
 
     git clone https://github.com/Nusscookie/hp1-mac-os-port.git
     cd hp1-mac-os-port
     ./build.sh
     open build/HP1.app
 
-On first launch the app shows an installer window:
+Either way, on first launch the app shows an installer window:
 
 1. Insert your Harry Potter CD. The app detects it on its own.
 2. Pick the language, if your disc has several.
@@ -75,6 +88,7 @@ the level and what happened.
 
     python3 tools/install_from_cd.py --lang eng      # copy the CD into gamedata/ (git-ignored) instead
     tools/make_app.sh [game folder]                  # app that plays that folder (default: gamedata/ if present)
+    tools/make_release.sh                            # release zip: macOS 15+, no game data, no local paths
     engine/build/SurrealEngine.app/Contents/MacOS/SurrealEngine --autostart "$PWD/gamedata"
 
 Engine options: `--url=<map>` boots straight into a map, `--maxticks=N` quits after N frames,
