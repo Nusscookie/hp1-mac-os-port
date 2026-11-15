@@ -5,11 +5,16 @@
 //! values, and later textures, meshes, sounds and levels). It never runs or interprets
 //! UnrealScript: script bytecode and script text are skipped.
 
+mod library;
+mod object;
 mod package;
 mod props;
 mod reader;
+pub mod texture;
 
-pub use package::{Export, Import, ObjRef, Package, StateFrame, object_flags};
+pub use library::{Library, ObjectHandle, PACKAGE_DIRS, PACKAGE_EXTENSIONS, package_files};
+pub use object::{Props, read_object};
+pub use package::{Export, Import, ObjRef, Package, StateFrame, is_field_class, object_flags};
 pub use props::{PropType, Property, Value, read_properties};
 pub use reader::{Reader, latin1};
 
@@ -25,6 +30,8 @@ pub enum Error {
     },
     /// The bytes don't match the expected layout.
     Format(String),
+    /// A reference into a package that isn't installed.
+    MissingPackage(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -35,6 +42,7 @@ impl fmt::Display for Error {
             Error::Io(e) => write!(f, "{e}"),
             Error::Eof { pos, len } => write!(f, "read past end of data (at {pos}, size {len})"),
             Error::Format(s) => f.write_str(s),
+            Error::MissingPackage(p) => write!(f, "package {p} is not installed"),
         }
     }
 }

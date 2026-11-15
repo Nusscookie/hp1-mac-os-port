@@ -9,4 +9,5 @@ publish.workspace = true
 
 [dependencies]
 ue1-read.workspace = true
+hp1-convert.workspace = true
 anyhow.workspace = true

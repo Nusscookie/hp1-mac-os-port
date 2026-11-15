@@ -4,6 +4,7 @@
 //!   hp1-tools exports <package> [class]    list exports, optionally of one class
 //!   hp1-tools props <package> <object>     an object's property values
 //!   hp1-tools check-data <game folder>     read every package and object property list
+//!   hp1-tools convert <game folder> <out>  write the game in the rewrite's own formats
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,8 @@ const USAGE: &str = "usage:
   hp1-tools info <package>...
   hp1-tools exports <package> [class]
   hp1-tools props <package> <object>
-  hp1-tools check-data <game folder>";
+  hp1-tools check-data <game folder>
+  hp1-tools convert <game folder> <output folder>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -25,6 +27,7 @@ fn main() -> ExitCode {
         Some("exports") if args.len() > 1 => cmd_exports(&args[1], args.get(2).map(String::as_str)),
         Some("props") if args.len() == 3 => cmd_props(&args[1], &args[2]),
         Some("check-data") if args.len() == 2 => cmd_check_data(Path::new(&args[1])),
+        Some("convert") if args.len() == 3 => cmd_convert(Path::new(&args[1]), Path::new(&args[2])),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -111,30 +114,34 @@ fn show_value(pkg: &Package, v: &Value) -> String {
     }
 }
 
-const PACKAGE_EXTENSIONS: &[&str] = &["u", "unr", "utx", "uax", "umx", "usx"];
-
 fn find_packages(game: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    for dir in ["System", "Maps", "Textures", "Sounds", "Music"] {
-        let dir = game.join(dir);
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        for entry in entries {
-            let path = entry?.path();
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-            // Language variants are named like `AllDialog.ger_uax` or `MenuArt.fre_utx`.
-            let base_ext = ext.rsplit('_').next().unwrap_or("");
-            if path.is_file()
-                && (PACKAGE_EXTENSIONS.contains(&ext.as_str()) || PACKAGE_EXTENSIONS.contains(&base_ext))
-            {
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
+    let out = ue1_read::package_files(game)?;
     if out.is_empty() {
         bail!("no Unreal packages found under {}", game.display());
     }
     Ok(out)
+}
+
+/// Converts the installed game into the rewrite's own formats.
+fn cmd_convert(game: &Path, out: &Path) -> Result<ExitCode> {
+    let start = std::time::Instant::now();
+    let conv = hp1_convert::Converter::new(game, out).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let manifest = conv.convert_all().map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut errors = 0;
+    for (name, section) in &manifest.sections {
+        println!(
+            "{name}: {} converted, {} errors, {} warnings",
+            section.items,
+            section.errors.len(),
+            section.warnings.len()
+        );
+        for e in section.errors.iter().take(10) {
+            println!("    {e}");
+        }
+        errors += section.errors.len();
+    }
+    println!("written to {} in {:.1}s", out.display(), start.elapsed().as_secs_f32());
+    Ok(if errors == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
 /// Opens every package and reads the property list of every ordinary object. Script

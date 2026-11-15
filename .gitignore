@@ -7,3 +7,4 @@ __pycache__/
 *.pyc
 engine/build-release/
 rewrite/target/
+gamedata-rs/

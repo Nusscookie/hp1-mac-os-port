@@ -1,0 +1,16 @@
+[package]
+name = "hp1-convert"
+description = "Converts the HP1 CD's Unreal packages into the rewrite's own formats."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ue1-read.workspace = true
+hp1-data.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+png.workspace = true
+rayon.workspace = true

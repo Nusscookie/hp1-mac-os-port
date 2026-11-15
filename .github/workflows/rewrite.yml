@@ -20,7 +20,7 @@ jobs:
       run:
         working-directory: rewrite
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
