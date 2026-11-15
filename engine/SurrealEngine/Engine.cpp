@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "Engine.h"
+#include "Utils/IcoImage.h"
 #include "Packages/Engine/Actors/ParticleFX.h"
 #include "VM/NativeFunc.h"
 #include "Packages/Core/UFunction.h"
@@ -2073,7 +2074,12 @@ void Engine::OpenWindow()
 	std::string versionString = !LaunchInfo.gameVersionString.empty() ? " (v" + LaunchInfo.gameVersionString + ")" : "";
 
 	if (LaunchInfo.IsHarryPotter1())
+	{
 		window->SetWindowTitle("Harry Potter and the Philosopher's Stone");
+		// The repository ships no game art: the window and Dock icon come from the installed game data.
+		if (auto icon = LoadIcoImage((fs::path(LaunchInfo.gameRootFolder) / "System" / "hp.ico").string(), 256))
+			window->SetWindowIcon({ icon });
+	}
 	else
 		window->SetWindowTitle(LaunchInfo.gameName + versionString + " - Surreal Engine");
 	window->SetFrameGeometry(Rect::xywh(0.0, 0.0, width, height));

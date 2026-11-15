@@ -60,6 +60,12 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/Utils/Logger.h
 	SurrealEngine/Utils/MacBundle.c
 	SurrealEngine/Utils/MacBundle.h
+	SurrealEngine/Utils/IcoImage.cpp
+	SurrealEngine/Utils/IcoImage.h
+	SurrealEngine/UI/Installer/DiscInstall.cpp
+	SurrealEngine/UI/Installer/DiscInstall.h
+	SurrealEngine/UI/Installer/InstallerWindow.cpp
+	SurrealEngine/UI/Installer/InstallerWindow.h
 	SurrealEngine/Utils/JsonValue.cpp
 	SurrealEngine/Utils/JsonValue.h
 	SurrealEngine/Utils/SHA1Sum.cpp

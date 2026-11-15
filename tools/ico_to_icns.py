@@ -2,6 +2,7 @@
 """Turn the game's 32x32 Windows icon (System/hp.ico) into a macOS .icns, scaled with sharp pixels.
 
 Usage: python3 tools/ico_to_icns.py gamedata/System/hp.ico out.icns
+       python3 tools/ico_to_icns.py --placeholder out.icns   (no game data: a plain "HP1" icon)
 """
 import os
 import struct
@@ -65,8 +66,42 @@ def write_png(path, pixels, size):
         f.write(png)
 
 
+# 3x5 pixel glyphs for the placeholder icon
+GLYPHS = {
+    "H": ["X.X", "X.X", "XXX", "X.X", "X.X"],
+    "P": ["XX.", "X.X", "XX.", "X..", "X.."],
+    "1": [".X.", "XX.", ".X.", ".X.", "XXX"],
+}
+
+
+def placeholder_icon():
+    """32x32 pixel art: gold "HP1" on a dark blue rounded square. Used until the game data is installed."""
+    size = 32
+    pixels = [[(0, 0, 0, 0)] * size for _ in range(size)]
+    for y in range(1, size - 1):
+        for x in range(1, size - 1):
+            corner = min(x - 1, size - 2 - x) + min(y - 1, size - 2 - y)
+            if corner >= 2 or (min(x - 1, size - 2 - x) >= 2 or min(y - 1, size - 2 - y) >= 2):
+                shade = 40 + (y * 30) // size
+                pixels[y][x] = (18, 24, shade + 40, 255)
+    text, scale, gap = "HP1", 2, 2
+    width = len(text) * 3 * scale + (len(text) - 1) * gap
+    x0, y0 = (size - width) // 2, (size - 5 * scale) // 2
+    for i, ch in enumerate(text):
+        for gy, row in enumerate(GLYPHS[ch]):
+            for gx, cell in enumerate(row):
+                if cell == "X":
+                    for dy in range(scale):
+                        for dx in range(scale):
+                            pixels[y0 + gy * scale + dy][x0 + i * (3 * scale + gap) + gx * scale + dx] = (232, 190, 80, 255)
+    return pixels
+
+
 def main():
-    pixels = decode_ico(open(sys.argv[1], "rb").read())
+    if sys.argv[1] == "--placeholder":
+        pixels = placeholder_icon()
+    else:
+        pixels = decode_ico(open(sys.argv[1], "rb").read())
     with tempfile.TemporaryDirectory() as tmp:
         iconset = os.path.join(tmp, "icon.iconset")
         os.mkdir(iconset)
