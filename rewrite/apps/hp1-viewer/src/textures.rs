@@ -13,6 +13,8 @@ pub struct Textures {
     index: HashMap<String, u32>,
     /// Index 0 is a grey stand-in for missing textures.
     pub images: Vec<Image>,
+    /// The texture path of each image.
+    paths: Vec<String>,
     pub missing: usize,
 }
 
@@ -43,6 +45,7 @@ impl Textures {
             info,
             index: HashMap::new(),
             images: vec![Image { width: 1, height: 1, rgba: vec![128, 128, 128, 255] }],
+            paths: vec![String::new()],
             missing: 0,
         })
     }
@@ -64,6 +67,7 @@ impl Textures {
         let i = match self.info.get(&key).map(|t| load_png(&self.data.join(&t.file))) {
             Some(Ok(img)) => {
                 self.images.push(img);
+                self.paths.push(key.clone());
                 self.images.len() as u32 - 1
             }
             _ => {
@@ -73,5 +77,48 @@ impl Textures {
         };
         self.index.insert(key, i);
         i
+    }
+}
+
+/// A texture that cycles through a chain of frames.
+pub struct Animation {
+    pub base: u32,
+    pub frames: Vec<u32>,
+    pub fps: f32,
+}
+
+impl Textures {
+    /// Loads the frames of every animated texture loaded so far.
+    pub fn animations(&mut self) -> Vec<Animation> {
+        let mut out = Vec::new();
+        // Only textures in use count as chain starts, not the frames loaded on the way.
+        let in_use = self.paths.len();
+        for i in 1..in_use {
+            let base = self.paths[i].clone();
+            let fps = self
+                .info(&base)
+                .and_then(|t| t.props.get("MaxFrameRate"))
+                .and_then(DataValue::as_f32)
+                .filter(|&f| f > 0.0)
+                .unwrap_or(25.0);
+            let mut frames = vec![i as u32];
+            let mut cur = base.clone();
+            while let Some(next) = self
+                .info(&cur)
+                .and_then(|t| t.props.get("AnimNext"))
+                .and_then(DataValue::as_str)
+                .map(str::to_owned)
+            {
+                if next.eq_ignore_ascii_case(&base) || frames.len() > 256 {
+                    break;
+                }
+                frames.push(self.get(&next));
+                cur = next;
+            }
+            if frames.len() > 1 {
+                out.push(Animation { base: i as u32, frames, fps });
+            }
+        }
+        out
     }
 }

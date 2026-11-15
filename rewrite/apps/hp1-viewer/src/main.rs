@@ -96,6 +96,7 @@ struct Loaded {
     textures: Vec<Image>,
     lightmaps: Vec<Image>,
     actors: actors::Actors,
+    animations: Vec<textures::Animation>,
     start: Camera,
     /// Where the sky is seen from (the sky zone's position), if the map has one.
     sky_origin: Option<Vec3>,
@@ -181,6 +182,7 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         .map(|a| Vec3::from(ActorProps::new(a, &classes).vec3("Location")));
 
     let actors = actors::Actors::load(data, &level, &classes, &mut textures)?;
+    let animations = textures.animations();
     let rebuild = Instant::now();
     actors.build_moving(1.0);
     println!("{} moving objects, rebuilt per frame in {:.2?}", actors.moving_count(), rebuild.elapsed());
@@ -196,7 +198,17 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         lightmaps.len(),
         t.elapsed()
     );
-    Ok(Loaded { vertices, indices, batches, textures: textures.images, lightmaps, actors, start, sky_origin })
+    Ok(Loaded {
+        vertices,
+        indices,
+        batches,
+        textures: textures.images,
+        lightmaps,
+        actors,
+        animations,
+        start,
+        sky_origin,
+    })
 }
 
 /// Uploads the level; geometry slot 1 holds the still objects, slot 2 the moving ones.
@@ -221,6 +233,12 @@ fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
 fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &Loaded, time: f32) {
     let moving = l.actors.build_moving(time);
     scene.geometry[2].update(gpu, &moving.vertices, &moving.indices, moving.batches);
+    for a in &l.animations {
+        let frame = (time * a.fps) as usize % a.frames.len();
+        if let Some(slot) = scene.texture_map.get_mut(a.base as usize) {
+            *slot = a.frames[frame];
+        }
+    }
 }
 
 fn main() -> Result<()> {

@@ -123,6 +123,8 @@ pub struct Geometry {
 /// Uploaded images plus any number of geometry sets (the level, the moving objects, …).
 pub struct Scene {
     pub geometry: Vec<Geometry>,
+    /// Which uploaded texture to draw for each texture index (for animated textures).
+    pub texture_map: Vec<u32>,
     textures: Vec<wgpu::BindGroup>,
     lightmaps: Vec<wgpu::BindGroup>,
 }
@@ -397,7 +399,7 @@ impl WorldRenderer {
 
     pub fn upload(&self, gpu: &Gpu, desc: &SceneDesc) -> Scene {
         let white = Image { width: 1, height: 1, rgba: vec![255; 4] };
-        let textures = desc
+        let textures: Vec<wgpu::BindGroup> = desc
             .textures
             .iter()
             .chain(desc.textures.is_empty().then_some(&white))
@@ -412,7 +414,8 @@ impl WorldRenderer {
             })
             .collect();
         let world = Geometry::new(gpu, desc.vertices, desc.indices, desc.batches.clone());
-        Scene { geometry: vec![world], textures, lightmaps }
+        let texture_map = (0..textures.len() as u32).collect();
+        Scene { geometry: vec![world], texture_map, textures, lightmaps }
     }
 
     /// Records drawing `scene` into `color`/`depth`, clearing both first. With `sky_view`, the
@@ -502,7 +505,8 @@ impl WorldRenderer {
                         Blend::Sky if slot == 1 => continue,
                         Blend::Sky => &self.opaque,
                     });
-                    let tex = scene.textures.get(b.texture as usize).unwrap_or(&scene.textures[0]);
+                    let shown = scene.texture_map.get(b.texture as usize).copied().unwrap_or(b.texture);
+                    let tex = scene.textures.get(shown as usize).unwrap_or(&scene.textures[0]);
                     let lm = scene.lightmaps.get(b.lightmap as usize).unwrap_or(&scene.lightmaps[0]);
                     pass.set_bind_group(1, tex, &[]);
                     pass.set_bind_group(2, lm, &[]);
