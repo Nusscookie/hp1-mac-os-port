@@ -31,7 +31,7 @@ int GameApp::main(Array<std::string> args)
 
 		if (commandline->HasArg("-h", "--help"))
 		{
-			std::cout << "SurrealEngine [--url=<mapname>] [--engineversion=X] [--autostart] [--maxticks=N] [Path to game folder]\n";
+			std::cout << "SurrealEngine [--url=<mapname>] [--engineversion=X] [--autostart] [--nolauncher] [--maxticks=N] [Path to game folder]\n";
 			return 0;
 		}
 
@@ -45,6 +45,14 @@ int GameApp::main(Array<std::string> args)
 				std::cerr << "No supported game found in the given folder" << std::endl;
 				return 1;
 			}
+			selectedGameIndex = 0;
+		}
+		else if (commandline->HasArg("", "--nolauncher"))
+		{
+			// App bundles pass their game folder and skip the launcher, but keep the normal error windows.
+			GameFolderSelection::UpdateList();
+			if (GameFolderSelection::Games.empty())
+				throw std::runtime_error("No supported game found in the given folder");
 			selectedGameIndex = 0;
 		}
 		else

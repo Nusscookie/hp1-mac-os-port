@@ -666,6 +666,34 @@ void NObject::Dot_QuatQuat_U227(quaternion& A, quaternion& B, float& ReturnValue
 	ReturnValue = dot(vec3{A.x, A.y, A.z}, vec3{B.x, B.y, B.z});
 }
 
+// "Package.Group.Name": try the group path first, then the bare name anywhere in the package.
+static UObject* LoadObjectByPath(const std::string& packageName, const std::string& path, UObject* objectClass)
+{
+	try
+	{
+		Package* package = engine->packages->GetPackage(packageName);
+		size_t lastdot = path.rfind('.');
+		if (lastdot == std::string::npos)
+			return package->GetUObject(objectClass->Name, path);
+
+		std::string group = path.substr(0, lastdot);
+		std::string name = path.substr(lastdot + 1);
+		UObject* object = nullptr;
+		try
+		{
+			object = package->GetUObject(objectClass->Name, name, group);
+		}
+		catch (...)
+		{
+		}
+		return object ? object : package->GetUObject(objectClass->Name, name);
+	}
+	catch (...)
+	{
+		return nullptr;
+	}
+}
+
 void NObject::DynamicLoadObject(const std::string& ObjectName, UObject* ObjectClass, std::optional<bool> MayFail, UObject*& ReturnValue)
 {
 	ReturnValue = nullptr;
@@ -678,13 +706,7 @@ void NObject::DynamicLoadObject(const std::string& ObjectName, UObject* ObjectCl
 			std::string packageName = ObjectName.substr(0, dotpos);
 			std::string objectName = ObjectName.substr(dotpos + 1);
 
-			try
-			{
-				ReturnValue = engine->packages->GetPackage(packageName)->GetUObject(ObjectClass->Name, objectName);
-			}
-			catch (...)
-			{
-			}
+			ReturnValue = LoadObjectByPath(packageName, objectName, ObjectClass);
 		}
 	}
 
@@ -706,13 +728,7 @@ void NObject::DynamicLoadObject_219(const std::string& ObjectName, UObject* Obje
 			std::string packageName = ObjectName.substr(0, dotpos);
 			std::string objectName = ObjectName.substr(dotpos + 1);
 
-			try
-			{
-				ReturnValue = engine->packages->GetPackage(packageName)->GetUObject(ObjectClass->Name, objectName);
-			}
-			catch (...)
-			{
-			}
+			ReturnValue = LoadObjectByPath(packageName, objectName, ObjectClass);
 		}
 	}
 

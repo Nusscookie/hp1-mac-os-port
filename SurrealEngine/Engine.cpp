@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "Engine.h"
+#include "Packages/Engine/Actors/ParticleFX.h"
 #include "VM/NativeFunc.h"
 #include "Packages/Core/UFunction.h"
 #include "Utils/CommandLine.h"
@@ -179,6 +180,7 @@ void Engine::SaveScreenshotBMP(const std::string& filename)
 //   press/release/tap  key name as used in the key bindings (Space, Enter, LeftMouse, W, ...)
 //   mouse/click        cursor position as a fraction of the window width and height
 //   rawmouse           relative mouse movement dx,dy
+//   uimouse            put the menu (UWindow) cursor at x,y in menu coordinates
 //   shot               save a screenshot to the given file
 //   cmd                run a console command
 void Engine::LoadInputScript(const std::string& script)
@@ -276,9 +278,29 @@ void Engine::RunInputScript(int tick)
 			parsePair(ev.Arg, dx, dy);
 			OnWindowRawMouseMove((int)dx, (int)dy);
 		}
+		else if (ev.Action == "uimouse")
+		{
+			// Place the UWindow menu cursor directly (console MouseX/MouseY, in the menu's own coordinates)
+			double x, y;
+			parsePair(ev.Arg, x, y);
+			console->SetPropertyFromString("MouseX", std::to_string(x));
+			console->SetPropertyFromString("MouseY", std::to_string(y));
+		}
 		else if (ev.Action == "shot")
 		{
 			SaveScreenshotBMP(ev.Arg);
+			if (console->HasProperty("MouseX"))
+				LogMessage("Input script: menu cursor at " + console->GetPropertyAsString("MouseX") + "," + console->GetPropertyAsString("MouseY"));
+			size_t systems = 0, alive = 0;
+			for (UActor* actor : Level->Actors)
+			{
+				if (actor && actor->ParticleState)
+				{
+					systems++;
+					alive += actor->ParticleState->Particles.size();
+				}
+			}
+			LogMessage("Input script: " + std::to_string(systems) + " particle systems, " + std::to_string(alive) + " particles alive, " + std::to_string(ParticleFX::DrawnParticles) + " drawn so far (" + std::to_string(ParticleFX::DrawCalls) + " system draws, skipped: " + std::to_string(ParticleFX::SkippedNoTexture) + " no texture, " + std::to_string(ParticleFX::SkippedAlpha) + " transparent, " + std::to_string(ParticleFX::SkippedSize) + " zero size)");
 		}
 		else if (ev.Action == "cmd")
 		{
@@ -1136,6 +1158,11 @@ void Engine::LoadMap(const UnrealURL& url, const std::map<std::string, std::stri
 	LevelInfo->DefaultTexture() = engine->DefaultTexture;
 
 	LevelInfo->URL = url;
+
+	// HP1 names save slots after LevelEnterText (cut at the first '.') and looks up the slot
+	// thumbnail "Save/SGS <name>.bmp". No map sets it, so the original engine filled in the map name.
+	if (LaunchInfo.IsHarryPotter1() && LevelInfo->LevelEnterText().empty())
+		LevelInfo->LevelEnterText() = url.Map;
 
 	GetLevelObject();
 

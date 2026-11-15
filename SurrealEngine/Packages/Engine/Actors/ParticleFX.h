@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Math/vec.h"
+#include "Math/bbox.h"
 #include "Utils/Array.h"
 
 class UActor;
@@ -42,4 +43,8 @@ public:
 	static bool IsParticleSystem(UActor* actor);
 	static void Tick(UActor* actor, float elapsed);
 	static void Draw(VisibleFrame* frame, UActor* actor);
+	static BBox GetBounds(UActor* actor);
+
+	// Test statistics, logged by the input script's "shot" action
+	static inline uint64_t DrawnParticles = 0, DrawCalls = 0, SkippedNoTexture = 0, SkippedAlpha = 0, SkippedSize = 0;
 };

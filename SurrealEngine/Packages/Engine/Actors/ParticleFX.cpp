@@ -254,12 +254,37 @@ void ParticleFX::Tick(UActor* actor, float elapsed)
 		actor->Destroy();
 }
 
+BBox ParticleFX::GetBounds(UActor* actor)
+{
+	// Render bounds: every live particle plus its size, so the system is culled like any other actor.
+	vec3 location = actor->Location();
+	BBox box;
+	box.min = location - vec3(16.0f);
+	box.max = location + vec3(16.0f);
+	if (!offsets.Valid || !actor->ParticleState)
+		return box;
+
+	vec3 origin = BoolProp(actor, offsets.bSystemRelative) ? location : vec3(0.0f);
+	for (const Particle& p : actor->ParticleState->Particles)
+	{
+		float extent = std::max(p.Width, p.Length) * std::max(p.EndScale, 1.0f) * 0.5f;
+		vec3 pos = p.Position + origin;
+		for (int i = 0; i < 3; i++)
+		{
+			box.min[i] = std::min(box.min[i], pos[i] - extent);
+			box.max[i] = std::max(box.max[i], pos[i] + extent);
+		}
+	}
+	return box;
+}
+
 void ParticleFX::Draw(VisibleFrame* frame, UActor* actor)
 {
 	if (!offsets.Valid || !actor->ParticleState)
 		return;
 
 	ParticleSystemState* state = actor->ParticleState.get();
+	DrawCalls++;
 	if (state->Particles.empty())
 		return;
 
@@ -290,7 +315,10 @@ void ParticleFX::Draw(VisibleFrame* frame, UActor* actor)
 	{
 		UTexture* texture = p.Texture ? p.Texture->GetAnimTexture() : nullptr;
 		if (!texture)
+		{
+			SkippedNoTexture++;
 			continue;
+		}
 
 		if (texture != boundTexture)
 		{
@@ -309,7 +337,10 @@ void ParticleFX::Draw(VisibleFrame* frame, UActor* actor)
 			alpha *= life / alphaGrow;
 		alpha = clamp(alpha, 0.0f, 1.0f) * visibility;
 		if (alpha <= 0.002f)
+		{
+			SkippedAlpha++;
 			continue;
+		}
 
 		vec3 color = mix(p.ColorStart, p.ColorEnd, Transition(p.Age, p.Lifetime, colorDelay)) * alpha;
 
@@ -319,7 +350,10 @@ void ParticleFX::Draw(VisibleFrame* frame, UActor* actor)
 		float halfWidth = p.Width * scale * 0.5f;
 		float halfLength = p.Length * scale * 0.5f;
 		if (halfWidth <= 0.0f || halfLength <= 0.0f)
+		{
+			SkippedSize++;
 			continue;
+		}
 
 		vec3 center = p.Position + systemOrigin;
 		vec3 sideAxis, upAxis;
@@ -358,6 +392,7 @@ void ParticleFX::Draw(VisibleFrame* frame, UActor* actor)
 		}
 
 		frame->Device->DrawGouraudPolygon(&frame->Frame, texinfo, vertices, 4, renderflags | texture->PolyFlags());
+		DrawnParticles++;
 	}
 
 	engine->render->Stats.Actors++;

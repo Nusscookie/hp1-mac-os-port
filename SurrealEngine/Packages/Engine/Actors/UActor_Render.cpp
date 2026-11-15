@@ -1,6 +1,7 @@
 
 #include "Precomp.h"
 #include "UActor.h"
+#include "ParticleFX.h"
 #include "Packages/Engine/Actors/Brush/UMover.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
 #include "Packages/Engine/Resources/Level/UModel.h"
@@ -43,6 +44,10 @@ void UActor::UpdateBspInfo()
 			bbox.min = vec3(0.0f);
 			bbox.max = vec3(0.0f);
 		}
+	}
+	else if (dt == DT_Particles && ParticleState)
+	{
+		bbox = ParticleFX::GetBounds(this);
 	}
 	else
 	{

@@ -401,6 +401,9 @@ static bool LoadObjectProperties(const fs::path& filename, UObject* object)
 					std::string value = line.substr(eq + 1);
 					if (!value.empty() && value.back() == '\r')
 						value.pop_back();
+					// Strings are written quoted (PrintValue) but SetValueFromString takes them raw
+					if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+						value = value.substr(1, value.size() - 2);
 					object->SetPropertyFromString(name, value);
 					break;
 				}
