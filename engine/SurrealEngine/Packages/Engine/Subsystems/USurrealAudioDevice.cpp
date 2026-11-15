@@ -1,0 +1,627 @@
+
+#include "Precomp.h"
+#include "USurrealAudioDevice.h"
+#include "Engine.h"
+#include "Package/PackageManager.h"
+#include "Package/IniProperty.h"
+#include "Packages/Engine/UViewport.h"
+#include "Packages/Engine/Actors/UActor.h"
+#include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
+#include "Packages/Engine/Actors/Pawn/UPawn.h"
+#include "Packages/Engine/Actors/Info/ULevelInfo.h"
+#include "Packages/Engine/Resources/UMusic.h"
+#include "Packages/Engine/Resources/USound.h"
+#include "Packages/Engine/Resources/Level/ULevel.h"
+
+static float square(float x) { return x * x; }
+
+std::string USurrealAudioDevice::GetPropertyAsString(const NameString& propertyName) const
+{
+	if (propertyName == "Class")
+		return "class'" + Class + "'";
+	else if (propertyName == "UseFilter")
+		return IniPropertyConverter<bool>::ToString(UseFilter);
+	else if (propertyName == "UseSurround")
+		return IniPropertyConverter<bool>::ToString(UseSurround);
+	else if (propertyName == "UseStereo")
+		return IniPropertyConverter<bool>::ToString(UseStereo);
+	else if (propertyName == "UseCDMusic")
+		return IniPropertyConverter<bool>::ToString(UseCDMusic);
+	else if (propertyName == "UseDigitalMusic")
+		return IniPropertyConverter<bool>::ToString(UseDigitalMusic);
+	else if (propertyName == "UseSpatial")
+		return IniPropertyConverter<bool>::ToString(UseSpatial);
+	else if (propertyName == "UseReverb")
+		return IniPropertyConverter<bool>::ToString(UseReverb);
+	else if (propertyName == "Use3dHardware")
+		return IniPropertyConverter<bool>::ToString(Use3dHardware);
+	else if (propertyName == "LowSoundQuality")
+		return IniPropertyConverter<bool>::ToString(LowSoundQuality);
+	else if (propertyName == "ReverseStereo")
+		return IniPropertyConverter<bool>::ToString(ReverseStereo);
+	else if (propertyName == "Latency")
+		return IniPropertyConverter<int>::ToString(Latency);
+	else if (propertyName == "OutputRate")
+		return IniPropertyConverter<AudioFrequency>::ToString(OutputRate);
+	else if (propertyName == "Channels")
+		return IniPropertyConverter<int>::ToString(Channels);
+	else if (propertyName == "MusicVolume")
+		return IniPropertyConverter<uint8_t>::ToString(MusicVolume);
+	else if (propertyName == "SoundVolume")
+		return IniPropertyConverter<uint8_t>::ToString(SoundVolume);
+	else if (propertyName == "SpeechVolume")
+		return IniPropertyConverter<uint8_t>::ToString(SpeechVolume);
+	else if (propertyName == "AmbientFactor")
+		return IniPropertyConverter<float>::ToString(AmbientFactor);
+
+	LogMessage("Queried unknown property for SurrealAudioDevice: " + propertyName.ToString());
+	return {};
+}
+
+void USurrealAudioDevice::SetPropertyFromString(const NameString& propertyName, const std::string& value)
+{
+	if (propertyName == "UseFilter")
+		UseFilter = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "UseSurround")
+		UseSurround = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "UseStereo")
+		UseStereo = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "UseCDMusic")
+		UseCDMusic = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "UseDigitalMusic")
+		UseDigitalMusic = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "UseSpatial")
+		UseSpatial = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "UseReverb")
+		UseReverb = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "Use3dHardware")
+		Use3dHardware = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "LowSoundQuality")
+		LowSoundQuality = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "ReverseStereo")
+		ReverseStereo = IniPropertyConverter<bool>::FromString(value);
+	else if (propertyName == "Latency")
+		Latency = IniPropertyConverter<int>::FromString(value);
+	else if (propertyName == "OutputRate")
+		OutputRate = IniPropertyConverter<AudioFrequency>::FromString(value);
+	else if (propertyName == "Channels")
+		Channels = IniPropertyConverter<int>::FromString(value);
+	else if (propertyName == "MusicVolume")
+		MusicVolume = IniPropertyConverter<uint8_t>::FromString(value);
+	else if (propertyName == "SoundVolume")
+		SoundVolume = IniPropertyConverter<uint8_t>::FromString(value);
+	else if (propertyName == "SpeechVolume")
+		SpeechVolume = IniPropertyConverter<uint8_t>::FromString(value);
+	else if (propertyName == "AmbientFactor")
+		AmbientFactor = IniPropertyConverter<float>::FromString(value);
+	else
+		LogMessage("Setting unknown property for SurrealAudioDevice: " + propertyName.ToString());
+
+	engine->packages->SetIniValue("System", Class, propertyName, value);
+}
+
+void USurrealAudioDevice::LoadProperties(const NameString& from)
+{
+	NameString name_from = from;
+
+	if (from == "")
+		name_from = NameString(Class);
+
+	UseFilter = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "UseFilter", UseFilter);
+	UseSurround = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "UseSurround", UseSurround);
+	UseStereo = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "UseStereo", UseStereo);
+	UseCDMusic = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "UseCDMusic", UseCDMusic);
+	UseDigitalMusic = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "UseDigitalMusic", UseDigitalMusic);
+	UseSpatial = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "UseSpatial", UseSpatial);
+	UseReverb = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "UseReverb", UseReverb);
+	Use3dHardware = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "Use3dHardware", Use3dHardware);
+	LowSoundQuality = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "LowSoundQuality", LowSoundQuality);
+	ReverseStereo = IniPropertyConverter<bool>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "ReverseStereo", ReverseStereo);
+	Latency = IniPropertyConverter<int>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "Latency", Latency);
+	OutputRate = IniPropertyConverter<AudioFrequency>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "OutputRate", OutputRate);
+	Channels = IniPropertyConverter<int>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "Channels", Channels);
+	MusicVolume = IniPropertyConverter<uint8_t>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "MusicVolume", MusicVolume);
+	SoundVolume = IniPropertyConverter<uint8_t>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "SoundVolume", SoundVolume);
+	if (engine->LaunchInfo.IsDeusEx())
+		SpeechVolume = IniPropertyConverter<uint8_t>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "SpeechVolume", SpeechVolume);
+	AmbientFactor = IniPropertyConverter<float>::FromIniFile(*engine->packages->GetIniFile("System"), name_from, "AmbientFactor", AmbientFactor);
+}
+
+void USurrealAudioDevice::SaveConfig()
+{
+	engine->packages->SetIniValue("System", Class, "UseFilter", IniPropertyConverter<bool>::ToString(UseFilter));
+	engine->packages->SetIniValue("System", Class, "UseSurround", IniPropertyConverter<bool>::ToString(UseSurround));
+	engine->packages->SetIniValue("System", Class, "UseStereo", IniPropertyConverter<bool>::ToString(UseStereo));
+	engine->packages->SetIniValue("System", Class, "UseCDMusic", IniPropertyConverter<bool>::ToString(UseCDMusic));
+	engine->packages->SetIniValue("System", Class, "UseDigitalMusic", IniPropertyConverter<bool>::ToString(UseDigitalMusic));
+	engine->packages->SetIniValue("System", Class, "UseSpatial", IniPropertyConverter<bool>::ToString(UseSpatial));
+	engine->packages->SetIniValue("System", Class, "UseReverb", IniPropertyConverter<bool>::ToString(UseReverb));
+	engine->packages->SetIniValue("System", Class, "Use3dHardware", IniPropertyConverter<bool>::ToString(Use3dHardware));
+	engine->packages->SetIniValue("System", Class, "LowSoundQuality", IniPropertyConverter<bool>::ToString(LowSoundQuality));
+	engine->packages->SetIniValue("System", Class, "ReverseStereo", IniPropertyConverter<bool>::ToString(ReverseStereo));
+	engine->packages->SetIniValue("System", Class, "Latency", IniPropertyConverter<int>::ToString(Latency));
+	engine->packages->SetIniValue("System", Class, "OutputRate", IniPropertyConverter<AudioFrequency>::ToString(OutputRate));
+	engine->packages->SetIniValue("System", Class, "Channels", IniPropertyConverter<int>::ToString(Channels));
+	engine->packages->SetIniValue("System", Class, "MusicVolume", IniPropertyConverter<uint8_t>::ToString(MusicVolume));
+	engine->packages->SetIniValue("System", Class, "SoundVolume", IniPropertyConverter<uint8_t>::ToString(SoundVolume));
+	if (engine->LaunchInfo.IsDeusEx())
+		engine->packages->SetIniValue("System", Class, "SpeechVolume", IniPropertyConverter<uint8_t>::ToString(SpeechVolume));
+	engine->packages->SetIniValue("System", Class, "AmbientFactor", IniPropertyConverter<float>::ToString(AmbientFactor));
+}
+
+void USurrealAudioDevice::InitDevice()
+{
+	// TODO: Add configurable option for audio device
+	// TODO: Add configurable option for audio output frequency
+	// TODO: Add option for number of sound channels
+	// TODO: Add option for music buffer count
+	// TODO: Add option for music buffer size
+	m_Device = AudioDevice::Create(OutputRate.frequency, Channels, 16, 256);
+	LogMessage("Audio device initialized");
+}
+
+void USurrealAudioDevice::ShutdownDevice()
+{
+	m_Device.reset();
+	LogMessage("Audio device has been shut down");
+}
+
+void USurrealAudioDevice::SetViewport(UViewport* InViewport)
+{
+	if (m_Viewport != InViewport)
+	{
+		StopSounds();
+
+		m_Viewport = InViewport;
+
+		if (m_Viewport)
+		{
+			if (m_Viewport->Actor()->Song() && m_Viewport->Actor()->Transition() == MTRAN_None)
+				m_Viewport->Actor()->Transition() = MTRAN_Instant;
+
+			PlayingSounds.resize(std::min(Channels, m_Device->GetTotalChannels()));
+		}
+	}
+}
+
+void USurrealAudioDevice::Update()
+{
+	StartAmbience();
+	UpdateAmbience();
+	UpdateSounds();
+	UpdateMusic();
+	m_Device->Update();
+}
+
+void USurrealAudioDevice::SetInstantMusicVolume(uint8_t newMusicVolume)
+{
+	MusicVolume = newMusicVolume;
+	Update();
+}
+
+void USurrealAudioDevice::SetInstantSoundVolume(uint8_t newSoundVolume)
+{
+	SoundVolume = newSoundVolume;
+	Update();
+}
+
+void USurrealAudioDevice::SetInstantSpeechVolume(uint8_t newSpeechVolume)
+{
+	SpeechVolume = newSpeechVolume;
+	Update();
+}
+
+void USurrealAudioDevice::PlayMusic(std::unique_ptr<AudioSource> source)
+{
+	GetDevice()->PlayMusic(std::move(source));
+}
+
+void USurrealAudioDevice::StopMusic()
+{
+	GetDevice()->PlayMusic({});
+}
+
+void USurrealAudioDevice::StartAmbience()
+{
+	if (!m_Viewport || !m_Viewport->Actor())
+		return;
+
+	bool realtime = m_Viewport->IsRealtime() && m_Viewport->Actor()->Level()->Pauser() == "";
+	if (realtime)
+	{
+		UActor* viewActor = m_Viewport->Actor()->ViewTarget() ? m_Viewport->Actor()->ViewTarget() : m_Viewport->Actor();
+		for (UActor* Actor : m_Viewport->Actor()->XLevel()->Actors)
+		{
+			if (Actor && Actor->AmbientSound() && dist_squared(viewActor->Location(), Actor->Location()) <= square(Actor->WorldSoundRadius()))
+			{
+				int id = CreateSoundId(Actor, SLOT_Ambient, false);
+				bool foundSound = false;
+				for (size_t j = 0; j < PlayingSounds.size(); j++)
+				{
+					if (PlayingSounds[j].Id == id)
+					{
+						foundSound = true;
+						break;
+					}
+				}
+				if (!foundSound)
+					PlaySound(Actor, id, Actor->AmbientSound(), Actor->Location(), AmbientFactor * Actor->SoundVolume() / 255.0f, Actor->WorldSoundRadius(), Actor->SoundPitch() / 64.0f);
+			}
+		}
+	}
+}
+
+void USurrealAudioDevice::UpdateAmbience()
+{
+	if (!m_Viewport || !m_Viewport->Actor())
+		return;
+
+	UActor* ViewActor = m_Viewport->Actor()->ViewTarget() ? m_Viewport->Actor()->ViewTarget() : m_Viewport->Actor();
+	bool Realtime = m_Viewport->IsRealtime() && m_Viewport->Actor()->Level()->Pauser() == "";
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+	{
+		PlayingSound& Playing = PlayingSounds[i];
+		if (GetSoundSlot(Playing.Id) == SLOT_Ambient)
+		{
+			if (Playing.Actor->bDeleteMe() || dist_squared(ViewActor->Location(), Playing.Actor->Location()) > square(Playing.Actor->WorldSoundRadius()) || Playing.Actor->AmbientSound() != Playing.Sound || !Realtime)
+			{
+				// Ambient sound went out of range
+				StopSound(i);
+			}
+			else
+			{
+				// Update basic sound properties
+				Playing.Volume = 2.0f * (AmbientFactor * Playing.Actor->SoundVolume() / 255.0f);
+				Playing.Radius = Playing.Actor->WorldSoundRadius();
+				Playing.Pitch = Playing.Actor->SoundPitch() / 64.0f;
+			}
+		}
+	}
+}
+
+void USurrealAudioDevice::UpdateLipSync(PlayingSound& Playing)
+{
+	if (!engine->LaunchInfo.IsDeusEx())
+		return;
+	if (!Playing.Actor || !engine->LevelInfo)
+		return;
+	if (GetSoundSlot(Playing.Id) != SLOT_Talk)
+		return;
+
+	UPawn* pawn = UObject::TryCast<UPawn>(Playing.Actor);
+	if (!pawn)
+		return;
+
+	float elapsedTime = engine->LevelInfo->TimeSeconds() - Playing.StartTime;
+	uint8_t letter = Playing.Sound->GetLipsyncLetterAt(std::round(elapsedTime * 10.0f) / 10.0f); // Update 10 times per second, DX has a tween time of 0.1 seconds
+
+	if (!letter)
+		return;
+
+	pawn->bIsSpeaking() = true;
+	pawn->nextPhoneme() = std::string(1, letter);
+}
+
+// Called wherever a slot is torn down, so the mouth does not freeze mid-vowel.
+void USurrealAudioDevice::ClearLipSync(PlayingSound& Playing)
+{
+	if (!engine->LaunchInfo.IsDeusEx())
+		return;
+	if (!Playing.Actor)
+		return;
+	if (GetSoundSlot(Playing.Id) != SLOT_Talk)
+		return;
+
+	if (UPawn* pawn = UObject::TryCast<UPawn>(Playing.Actor))
+	{
+		pawn->bIsSpeaking() = false;
+		pawn->nextPhoneme() = "X";   // X == MouthClosed
+	}
+}
+
+void USurrealAudioDevice::UpdateSounds()
+{
+	if (!m_Viewport || !m_Viewport->Actor())
+		return;
+
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+	{
+		PlayingSound& Playing = PlayingSounds[i];
+
+		if (Playing.Id != 0)
+		{
+			// Update positioning from actor, if available
+			if (Playing.Actor)
+				Playing.Location = Playing.Actor->Location();
+
+			// Global volume for the sound type
+			float globalVolume = SoundVolume / 255.0f * 0.5f;
+			if (engine->LaunchInfo.IsDeusEx() && GetSoundSlot(Playing.Id) == SLOT_Talk)
+				globalVolume = SpeechVolume / 255.0f * 0.5f;
+
+			// Update the priority
+			Playing.Priority = SoundPriority(m_Viewport, Playing.Location, Playing.Volume * globalVolume, Playing.Radius);
+
+			UpdateLipSync(Playing);
+
+			// Update the device sound channels to match our configuration
+			if (!Playing.IsActive)
+			{
+				m_Device->PlaySound((int)i, Playing.Sound, Playing.Location, Playing.Volume * globalVolume, Playing.Radius, Playing.Pitch);
+				Playing.IsActive = true;
+			}
+			else
+			{
+				m_Device->UpdateSound((int)i, Playing.Location, Playing.Volume * globalVolume, Playing.Radius, Playing.Pitch);
+				if (!m_Device->IsPlaying((int)i))
+				{
+					ClearLipSync(Playing);
+					Playing = {};
+				}
+			}
+		}
+	}
+}
+
+void USurrealAudioDevice::UpdateMusic()
+{
+	m_Device->SetMusicVolume(MusicVolume / 255.0f);
+
+	if (m_Viewport && m_Viewport->Actor() && m_Viewport->Actor()->Transition() != MTRAN_None)
+	{
+		// To do: this needs to fade out the old song before switching
+
+		if (CurrentSong)
+		{
+			m_Device->PlayMusic({});
+			CurrentSong = nullptr;
+		}
+
+		CurrentSong = m_Viewport->Actor()->Song();
+		CurrentSection = m_Viewport->Actor()->SongSection();
+
+		if (CurrentSong && UseDigitalMusic)
+		{
+			int subsong = CurrentSection != 255 ? CurrentSection : 0;
+
+			std::unique_ptr<AudioSource> source;
+			if (CurrentSong->Format == "mp3" || CurrentSong->Format == "mp2")
+				source = AudioSource::CreateMp3(CurrentSong->Data);
+			else if (CurrentSong->Format == "ogg" || CurrentSong->Format == "event") // Some ogg files in Unreal 227 have event as format for some reason
+				source = AudioSource::CreateOgg(CurrentSong->Data, true);
+			else if (CurrentSong->Format == "wav")
+				source = AudioSource::CreateWav(CurrentSong->Data);
+			else
+				source = AudioSource::CreateMod(CurrentSong->Data, true, subsong);
+
+			if (source)
+				m_Device->PlayMusic(std::move(source));
+		}
+
+		m_Viewport->Actor()->Transition() = MTRAN_None;
+	}
+}
+
+int USurrealAudioDevice::CreateSoundId(UActor* actor, ESoundSlot slot, bool noOverride)
+{
+	if (slot == SLOT_None)
+		return ((--FreeSlot) << 4) | (int)noOverride;
+	else
+		return (int)((((uint32_t)(ptrdiff_t)actor) << 4) | ((int)slot << 1) | (int)noOverride);
+}
+
+bool USurrealAudioDevice::IsSoundInterruptable(int id)
+{
+	return (id & 1) == 0;
+}
+
+ESoundSlot USurrealAudioDevice::GetSoundSlot(int id)
+{
+	return (ESoundSlot)((id >> 1) & 7);
+}
+
+bool USurrealAudioDevice::IsSameSoundId(int id1, int id2)
+{
+	return (id1 & ~1) == (id2 & ~1);
+}
+
+bool USurrealAudioDevice::PlaySound(UActor* Actor, int Id, USound* Sound, vec3 Location, float Volume, float Radius, float Pitch)
+{
+	if (Radius <= 0.0) // Seems we have zero radius values. Lovely.
+		Radius = 1500.0f;
+
+	if (GetSoundSlot(Id) == SLOT_Talk && engine->LaunchInfo.IsDeusEx())
+	{
+		// Should this still be directional?
+		Volume *= 2.0f;
+	}
+	else
+	{
+		// Attempt to normalize volume around 1.0 as the values used by the original games are just really broken in general.
+		if (Volume >= 8.0f)
+			Volume = 0.8f; // Special check for announcer garbage
+		else
+			Volume = (Volume - 1.0f) * 0.25f + 1.0f;
+	}
+
+	if (!m_Viewport || !Sound)
+		return false;
+
+	// Allocate a new slot if requested
+	if (GetSoundSlot(Id) == SLOT_None)
+		Id = CreateSoundId(Actor, SLOT_None, false);
+
+	float Priority = SoundPriority(m_Viewport, Location, Volume, Radius);
+
+	// If already playing, stop it
+	size_t Index = PlayingSounds.size();
+	float BestPriority = Priority;
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+	{
+		PlayingSound& Playing = PlayingSounds[i];
+		if (IsSameSoundId(Playing.Id, Id))
+		{
+			// Skip if not interruptable.
+			if (!IsSoundInterruptable(Id))
+				return 0;
+
+			// Stop the sound.
+			Index = i;
+			break;
+		}
+		else if (Playing.Priority <= BestPriority)
+		{
+			Index = i;
+			BestPriority = Playing.Priority;
+		}
+	}
+
+	// If no sound, or its priority is overruled, stop it
+	if (Index == PlayingSounds.size())
+		return 0;
+
+	Sound->CheckSoundSamples();
+
+	// Put the sound on the play-list
+	StopSound(Index);
+	PlayingSounds[Index] = PlayingSound(Actor, Id, Sound, Location, Volume, Radius, Pitch, Priority);
+	PlayingSounds[Index].StartTime = engine->LevelInfo->TimeSeconds();
+
+	return true;
+}
+
+void USurrealAudioDevice::ActorDestroyed(UActor* Actor)
+{
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+	{
+		if (PlayingSounds[i].Actor == Actor)
+		{
+			if ((PlayingSounds[i].Id & 14) == SLOT_Ambient * 2)
+			{
+				// Stop ambient sound when actor dies
+				StopSound(i);
+			}
+			else
+			{
+				// Unbind regular sounds from actors
+				PlayingSounds[i].Actor = nullptr;
+			}
+		}
+	}
+}
+
+void USurrealAudioDevice::StopSound(UActor* Actor, int Id)
+{
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+	{
+		if (PlayingSounds[i].Actor == Actor && PlayingSounds[i].Id == Id)
+		{
+			StopSound(i);
+			break;
+		}
+	}
+}
+
+// Harry Potter 1: ModifySound and StopSound address a sound by its asset, or by the slot it plays in when no sound is given
+static bool MatchesActorSound(const PlayingSound& playing, UActor* Actor, USound* Sound, int Slot)
+{
+	if (playing.Actor != Actor || !playing.Sound)
+		return false;
+	if (Sound)
+		return playing.Sound == Sound;
+	return Slot < 0 || (int)USurrealAudioDevice::GetSoundSlot(playing.Id) == Slot;
+}
+
+bool USurrealAudioDevice::ModifyActorSound(UActor* Actor, USound* Sound, int Slot, int Parameter, float Value)
+{
+	bool found = false;
+	for (PlayingSound& playing : PlayingSounds)
+	{
+		if (!MatchesActorSound(playing, Actor, Sound, Slot))
+			continue;
+
+		switch (Parameter)
+		{
+		case 0: playing.Volume = Value; break; // SOUND_Volume
+		case 1: playing.Radius = Value; break; // SOUND_Radius
+		case 2: playing.Pitch = Value; break;  // SOUND_Pitch
+		}
+		found = true;
+	}
+	return found;
+}
+
+void USurrealAudioDevice::StopActorSound(UActor* Actor, USound* Sound, int Slot)
+{
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+	{
+		if (MatchesActorSound(PlayingSounds[i], Actor, Sound, Slot))
+			StopSound(i);
+	}
+}
+
+void USurrealAudioDevice::StopSound(size_t index)
+{
+	PlayingSound& Playing = PlayingSounds[index];
+
+	if (Playing.IsActive)
+	{
+		m_Device->StopSound((int)index);
+		Playing.IsActive = false;
+	}
+
+	ClearLipSync(Playing);
+	PlayingSounds[index] = {};
+}
+
+void USurrealAudioDevice::StopSounds()
+{
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+		StopSound(i);
+
+	m_Device->PlayMusic(nullptr);
+	m_Viewport = nullptr;
+}
+
+void USurrealAudioDevice::BreakpointTriggered()
+{
+	if (m_Device)
+	{
+		uint8_t oldSound = SoundVolume;
+		uint8_t oldSpeech = SpeechVolume;
+		SoundVolume = 0;
+		UpdateSounds();
+		m_Device->Update();
+		SoundVolume = oldSound;
+		SpeechVolume = oldSpeech;
+	}
+}
+
+void USurrealAudioDevice::AddStats(Array<std::string>& lines)
+{
+	const int bufsize = 1024;
+	char buffer[bufsize];
+	int index = 0;
+	for (const PlayingSound& sound : PlayingSounds)
+	{
+		if (sound.IsActive)
+		{
+			std::snprintf(buffer, bufsize - 1, "Channel %2i: Vol: %05.2f %s", index, sound.Volume, sound.Sound->Name.ToString().c_str());
+		}
+		else
+		{
+			std::snprintf(buffer, bufsize - 1, "Channel %2i: None", index);
+		}
+		buffer[bufsize - 1] = 0;
+		lines.push_back(buffer);
+		index++;
+	}
+}
+
+float USurrealAudioDevice::SoundPriority(UViewport* Viewport, vec3 Location, float Volume, float Radius)
+{
+	UActor* target = Viewport->Actor();
+	if (target && Viewport->Actor()->ViewTarget())
+		target = Viewport->Actor()->ViewTarget();
+	return target ? std::max(Volume * (1.0f - length(Location - target->Location()) / Radius), 0.0f) : 0.0f;
+}
