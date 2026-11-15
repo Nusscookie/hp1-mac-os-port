@@ -237,6 +237,18 @@ bool UPawn::TickRotateTo(const vec3& target)
 
 bool UPawn::TickMoveTo(const vec3& target)
 {
+	if (!TickMoveToInner(target))
+		return false;
+
+	// The move is over. Without this, HP1's NPCs keep accelerating towards the old destination and glide along in
+	// their idle animation after they switch to a pause or idle state.
+	if (engine->LaunchInfo.IsHarryPotter1() && !bIsPlayer())
+		Acceleration() = vec3(0.0f);
+	return true;
+}
+
+bool UPawn::TickMoveToInner(const vec3& target)
+{
 	if (MoveTimer() < 0.0f)
 		return true;
 

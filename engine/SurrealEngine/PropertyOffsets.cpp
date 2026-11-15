@@ -1466,6 +1466,14 @@ static void InitPropertyOffsets_Mover(PackageManager* packages)
 	PropOffsets_Mover.SimOldRotPitch = cls->GetPropertyDataOffset("SimOldRotPitch");
 	PropOffsets_Mover.SimOldRotRoll = cls->GetPropertyDataOffset("SimOldRotRoll");
 	PropOffsets_Mover.SimOldRotYaw = cls->GetPropertyDataOffset("SimOldRotYaw");
+	// Base class properties come first, so the last property with the name is the one Mover's script uses.
+	for (UProperty* prop : cls->Properties)
+	{
+		if (prop->Name == "PhysAlpha")
+			PropOffsets_Mover.PhysAlpha = prop->DataOffset;
+		else if (prop->Name == "PhysRate")
+			PropOffsets_Mover.PhysRate = prop->DataOffset;
+	}
 	PropOffsets_Mover.StayOpenTime = cls->GetPropertyDataOffset("StayOpenTime");
 	PropOffsets_Mover.TriggerActor = cls->GetPropertyDataOffset("TriggerActor");
 	PropOffsets_Mover.TriggerActor2 = cls->GetPropertyDataOffset("TriggerActor2");

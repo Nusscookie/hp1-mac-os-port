@@ -261,7 +261,8 @@ std::string Frame::GetName()
 std::string Frame::GetDisassembly(Expression* statement)
 {
 	std::string result;
-	PrintPrettyExpression::Print([&](const std::string& text) { result += text; }, statement);
+	if (statement)
+		PrintPrettyExpression::Print([&](const std::string& text) { result += text; }, statement);
 	return result;
 }
 
@@ -494,10 +495,17 @@ ExpressionEvalResult Frame::Run()
 	if (!Func)
 		return {};
 
+	// State code that has nothing (left) to run simply stops, as in UE1. This happens when a latent
+	// action of the previous state finishes after the object switched to a state without code.
+	if (IsStateFrame && StatementIndex >= Func->Code->Statements.size())
+	{
+		LatentState = LatentRunState::Stop;
+		return {};
+	}
+
 	ActiveCallStackFrame activeFrame(this);
 
-	if (!Func->Code->Statements.empty())
-		StepExpression = Func->Code->Statements[StatementIndex];
+	StepExpression = !Func->Code->Statements.empty() ? Func->Code->Statements[StatementIndex] : nullptr;
 
 	if (RunState == FrameRunState::StepInto)
 	{
@@ -542,6 +550,11 @@ ExpressionEvalResult Frame::Run()
 		//ExpressionEvalResult result = ExpressionEvaluator::Eval(statement, Object, Object, Variables);
 		ExpressionEvalResult result = RunExpr(statement, Object, Object, Variables);
 		if (!Func)
+			return result;
+
+		// The statement switched this object to a state without code at the requested label (for example
+		// Harry's empty SpellLearning state, entered from a trigger touched during a move): state code ends here.
+		if (IsStateFrame && LatentState == LatentRunState::Stop && result.Result != StatementResult::Return)
 			return result;
 		switch (result.Result)
 		{

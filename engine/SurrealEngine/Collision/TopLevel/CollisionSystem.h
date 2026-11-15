@@ -40,6 +40,12 @@ public:
 	Array<UActor*> EncroachingActors(UActor* actor);
 
 	void SetLevel(ULevelInfo* levelInfo, ULevel* level);
+
+	// Harry Potter 1 box collision (CT_Box)
+	static void UpdateCollisionShape(UActor* actor);
+	static vec3 BoxExpansion(UActor* box, double cylinderHeight, double cylinderRadius);
+	static bool BoxPointOverlap(UActor* box, const dvec3& point, const vec3& expansion);
+	static double BoxRayTrace(UActor* box, const dvec3& origin, double tmin, const dvec3& dirNormalized, double tmax, const vec3& expansion, vec3& normal);
 	void AddToCollision(UActor* actor);
 	void RemoveFromCollision(UActor* actor);
 

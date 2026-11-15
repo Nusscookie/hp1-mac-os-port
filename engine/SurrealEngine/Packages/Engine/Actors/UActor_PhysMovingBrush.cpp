@@ -23,11 +23,11 @@ void UActor::TickMovingBrush(float elapsed)
 			if (!bInterpolating())
 				break;
 
-			if (PhysRate() <= 0.0f)
+			if (mover->MoverPhysRate() <= 0.0f)
 				break;
 
-			float physAlpha = PhysAlpha();
-			float physRate = PhysRate();
+			float physAlpha = mover->MoverPhysAlpha();
+			float physRate = mover->MoverPhysRate();
 
 			physAlpha += physRate * timeLeft;
 			if (physAlpha > 1.0f)
@@ -62,7 +62,7 @@ void UActor::TickMovingBrush(float elapsed)
 			if (TryMove(targetPos - Location()).Fraction == 1.0f)
 			{
 				SetRotation(targetRotation);
-				PhysAlpha() = physAlpha;
+				mover->MoverPhysAlpha() = physAlpha;
 
 				if (physAlpha == 1.0f)
 				{

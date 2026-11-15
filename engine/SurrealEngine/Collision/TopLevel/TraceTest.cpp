@@ -251,6 +251,15 @@ void TraceTester::TraceActor(UActor* actor, const dvec3& origin, double tmin, co
 		if (!traceActors || visibilityOnly)
 			return;
 
+		if (actor->Collision.IsBox)
+		{
+			vec3 normal(0.0f);
+			double t = CollisionSystem::BoxRayTrace(actor, origin, tmin, dirNormalized, tmax, CollisionSystem::BoxExpansion(actor, height, radius), normal);
+			if (t < tmax)
+				hits.push_back({ (float)t, normal, actor, nullptr, nullptr });
+			return;
+		}
+
 		double t = CylinderActorTrace(origin, tmin, dirNormalized, tmax, height, radius, actor);
 		if (t < tmax)
 		{

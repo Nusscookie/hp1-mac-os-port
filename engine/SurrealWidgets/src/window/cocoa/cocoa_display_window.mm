@@ -662,6 +662,7 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
     CocoaDisplayWindowImpl* impl;
 }
 - (id)initWithImpl:(CocoaDisplayWindowImpl*)impl;
+- (void)detach;
 @end
 
 @implementation ZWidgetWindowDelegate
@@ -676,6 +677,14 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
         [center addObserver:self selector:@selector(appDidResignActive:) name:NSApplicationDidResignActiveNotification object:nil];
     }
     return self;
+}
+
+- (void)detach
+{
+    // The delegate object can outlive the window (autorelease), so stop listening and forget the
+    // window implementation as soon as the window goes away.
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    impl = nullptr;
 }
 
 - (void)dealloc
@@ -895,6 +904,7 @@ CocoaDisplayWindow::~CocoaDisplayWindow()
         [impl->window close];
         impl->window = nil;
     }
+    [impl->delegate detach];
     impl->delegate = nil;
 }
 

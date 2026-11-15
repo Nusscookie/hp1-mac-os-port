@@ -33,6 +33,7 @@ public:
 
 	bool TickRotateTo(const vec3& target);
 	bool TickMoveTo(const vec3& target);
+	bool TickMoveToInner(const vec3& target);
 
 	// Returns true if any of the several points of other is visible (origin, top, bottom)
 	// ignoreDistance is a Deus Ex only parameter, it is always false on Unreal.

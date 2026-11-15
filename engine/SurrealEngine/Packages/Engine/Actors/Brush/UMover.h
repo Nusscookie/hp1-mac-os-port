@@ -53,6 +53,8 @@ public:
 	int& SimOldRotPitch() { return Value<int>(PropOffsets_Mover.SimOldRotPitch); }
 	int& SimOldRotRoll() { return Value<int>(PropOffsets_Mover.SimOldRotRoll); }
 	int& SimOldRotYaw() { return Value<int>(PropOffsets_Mover.SimOldRotYaw); }
+	float& MoverPhysAlpha() { return Value<float>(PropOffsets_Mover.PhysAlpha); }
+	float& MoverPhysRate() { return Value<float>(PropOffsets_Mover.PhysRate); }
 	float& StayOpenTime() { return Value<float>(PropOffsets_Mover.StayOpenTime); }
 	UActor*& TriggerActor() { return Value<UActor*>(PropOffsets_Mover.TriggerActor); }
 	UActor*& TriggerActor2() { return Value<UActor*>(PropOffsets_Mover.TriggerActor2); }

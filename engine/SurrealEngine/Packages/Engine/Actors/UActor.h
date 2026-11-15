@@ -515,6 +515,13 @@ public:
 		vec3 Location = { 0.0f };
 		vec3 Extents = { 0.0f };
 		int CheckCounter = -1;
+
+		// Harry Potter 1 CT_Box actors: an oriented box with half sizes CollisionRadius (local X),
+		// CollisionWidth (local Y) and CollisionHeight (local Z) instead of a cylinder.
+		bool IsBox = false;
+		vec3 BoxCenter = { 0.0f };
+		vec3 BoxHalfSize = { 0.0f };
+		vec3 BoxAxis[3] = { vec3(1.0f, 0.0f, 0.0f), vec3(0.0f, 1.0f, 0.0f), vec3(0.0f, 0.0f, 1.0f) };
 	} Collision;
 
 	// The status of the actor in the light system

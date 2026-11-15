@@ -1319,6 +1319,9 @@ struct PropertyOffsets_Mover
 	PropertyDataOffset SimOldRotPitch;
 	PropertyDataOffset SimOldRotRoll;
 	PropertyDataOffset SimOldRotYaw;
+	// HP1 redeclares PhysAlpha/PhysRate in Mover, hiding Actor's copies. Same as Actor's offsets elsewhere.
+	PropertyDataOffset PhysAlpha;
+	PropertyDataOffset PhysRate;
 	PropertyDataOffset StayOpenTime;
 	PropertyDataOffset TriggerActor;
 	PropertyDataOffset TriggerActor2;

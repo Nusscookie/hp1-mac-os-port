@@ -282,6 +282,9 @@ Array<UActor*> OverlapTester::EncroachingActors(UActor* actor)
 
 bool OverlapTester::IsOverlapping(UActor* actor1, UActor* actor2)
 {
+	// The box side is tested exactly; the other actor is treated as a cylinder
+	if (actor1->Collision.IsBox && !actor2->Collision.IsBox)
+		std::swap(actor1, actor2);
 	return CylinderActorOverlap(to_dvec3(actor1->Location()), actor1->CollisionHeight(), actor1->CollisionRadius(), actor2);
 }
 
@@ -334,6 +337,9 @@ bool OverlapTester::SphereActorOverlap(const dvec3& sphereCenter, double sphereR
 	if (actor->Brush()) // Ignore brushes for now
 		return false;
 
+	if (actor->Collision.IsBox)
+		return CollisionSystem::BoxPointOverlap(actor, sphereCenter, vec3((float)sphereRadius));
+
 	dvec3 center = to_dvec3(actor->Location());
 	double height = actor->CollisionHeight();
 	double radius = actor->CollisionRadius();
@@ -346,6 +352,9 @@ bool OverlapTester::CylinderActorOverlap(const dvec3& origin, double cylinderHei
 {
 	if (actor->Brush()) // Ignore brushes for now
 		return false;
+
+	if (actor->Collision.IsBox)
+		return CollisionSystem::BoxPointOverlap(actor, origin, CollisionSystem::BoxExpansion(actor, cylinderHeight, cylinderRadius));
 
 	dvec3 center = to_dvec3(actor->Location());
 	double height = actor->CollisionHeight();
