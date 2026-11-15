@@ -522,6 +522,44 @@ void USurrealAudioDevice::StopSound(UActor* Actor, int Id)
 	}
 }
 
+// Harry Potter 1: ModifySound and StopSound address a sound by its asset, or by the slot it plays in when no sound is given
+static bool MatchesActorSound(const PlayingSound& playing, UActor* Actor, USound* Sound, int Slot)
+{
+	if (playing.Actor != Actor || !playing.Sound)
+		return false;
+	if (Sound)
+		return playing.Sound == Sound;
+	return Slot < 0 || (int)USurrealAudioDevice::GetSoundSlot(playing.Id) == Slot;
+}
+
+bool USurrealAudioDevice::ModifyActorSound(UActor* Actor, USound* Sound, int Slot, int Parameter, float Value)
+{
+	bool found = false;
+	for (PlayingSound& playing : PlayingSounds)
+	{
+		if (!MatchesActorSound(playing, Actor, Sound, Slot))
+			continue;
+
+		switch (Parameter)
+		{
+		case 0: playing.Volume = Value; break; // SOUND_Volume
+		case 1: playing.Radius = Value; break; // SOUND_Radius
+		case 2: playing.Pitch = Value; break;  // SOUND_Pitch
+		}
+		found = true;
+	}
+	return found;
+}
+
+void USurrealAudioDevice::StopActorSound(UActor* Actor, USound* Sound, int Slot)
+{
+	for (size_t i = 0; i < PlayingSounds.size(); i++)
+	{
+		if (MatchesActorSound(PlayingSounds[i], Actor, Sound, Slot))
+			StopSound(i);
+	}
+}
+
 void USurrealAudioDevice::StopSound(size_t index)
 {
 	PlayingSound& Playing = PlayingSounds[index];

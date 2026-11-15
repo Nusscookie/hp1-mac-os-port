@@ -469,10 +469,15 @@ bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* li
 			continue;
 
 		uint32_t renderflags = material.PolyFlags | polyFlags;
+		if (!(renderflags & PF_Environment) && (material.TextureIndex < 0 || (size_t)material.TextureIndex >= engine->render->Mesh.textures.size()))
+			continue;
 		UTexture* tex = (renderflags & PF_Environment) ? engine->render->Mesh.envmap : engine->render->Mesh.textures[material.TextureIndex];
 
 		// skip if no texture
 		if (!tex)
+			continue;
+
+		if (face.Indices[0] >= mesh->Wedges.size() || face.Indices[1] >= mesh->Wedges.size() || face.Indices[2] >= mesh->Wedges.size())
 			continue;
 
 		bool isTranslucent = (renderflags & (PF_Translucent | PF_Modulated | PF_Highlighted)) != 0;
@@ -504,7 +509,7 @@ bool VisibleMesh::DrawLodMeshFace(VisibleFrame* frame, UActor* actor, UActor* li
 			if (skinnedVerts)
 			{
 				// Skeletal mesh: the vertices were already posed by the caller
-				if (wedge.Vertex >= skinnedVerts->size())
+				if (wedge.Vertex >= skinnedVerts->size() || wedge.Vertex >= skinnedNormals->size())
 					return false; // out of bounds
 
 				normal = (*skinnedNormals)[wedge.Vertex];
@@ -968,10 +973,15 @@ bool VisibleMesh::DrawLodMeshFaceDX(VisibleFrame* frame, UActor* actor, UActor* 
 			continue;
 
 		uint32_t renderflags = material.PolyFlags | polyFlags;
+		if (!(renderflags & PF_Environment) && (material.TextureIndex < 0 || (size_t)material.TextureIndex >= engine->render->Mesh.textures.size()))
+			continue;
 		UTexture* tex = (renderflags & PF_Environment) ? engine->render->Mesh.envmap : engine->render->Mesh.textures[material.TextureIndex];
 
 		// skip if no texture
 		if (!tex)
+			continue;
+
+		if (face.Indices[0] >= mesh->Wedges.size() || face.Indices[1] >= mesh->Wedges.size() || face.Indices[2] >= mesh->Wedges.size())
 			continue;
 
 		bool isTranslucent = (renderflags & (PF_Translucent | PF_Modulated | PF_Highlighted)) != 0;

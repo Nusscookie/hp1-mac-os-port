@@ -7,10 +7,11 @@
 #include "Packages/Engine/Resources/Mesh/USkeletalMesh.h"
 #include "Packages/Engine/Resources/Mesh/UAnimation.h"
 #include "Engine.h"
+#include "Package/PackageManager.h"
 
 bool UActor::HasAnim(const NameString& sequence)
 {
-	return Mesh() && Mesh()->GetSequence(sequence);
+	return GetAnimMesh() && GetAnimMesh()->GetSequence(sequence);
 }
 
 bool UActor::IsAnimating()
@@ -20,7 +21,11 @@ bool UActor::IsAnimating()
 
 bool UActor::IsAnimating_HP(std::optional<NameString> RootBone)
 {
-	// To do: per bone range queries once animation channels exist
+	if (RootBone && !RootBone->IsNone())
+	{
+		if (UActor* channel = FindSkelChannel(*RootBone, false))
+			return channel->IsAnimating();
+	}
 	return IsAnimating();
 }
 
@@ -38,15 +43,15 @@ void UActor::FinishAnim()
 
 void UActor::FinishAnim_HP(std::optional<NameString> RootBone)
 {
-	// To do: per bone range waits once animation channels exist
+	// To do: waiting for a channel's animation from its owner (FinishAnim with a root bone). No script in the game does that.
 	FinishAnim();
 }
 
 NameString UActor::GetAnimGroup(const NameString& sequence)
 {
-	if (Mesh())
+	if (GetAnimMesh())
 	{
-		MeshAnimSeq* seq = Mesh()->GetSequence(sequence);
+		MeshAnimSeq* seq = GetAnimMesh()->GetSequence(sequence);
 		if (seq)
 			return seq->Group;
 	}
@@ -71,9 +76,9 @@ NameString UActor::GetAnimGroup(const NameString& sequence)
 
 void UActor::PlayAnim(const NameString& sequence, float rate, float tweenTime)
 {
-	if (Mesh())
+	if (GetAnimMesh())
 	{
-		MeshAnimSeq* seq = Mesh()->GetSequence(sequence);
+		MeshAnimSeq* seq = GetAnimMesh()->GetSequence(sequence);
 		if (seq)
 		{
 			SetTweenFromAnimFrame();
@@ -116,13 +121,13 @@ void UActor::PlayBlendAnim(const NameString& sequenceName, float rate, float twe
 		LogMessage("Invalid channel for PlayBlendAnim!");
 		return;
 	}
-	if (!Mesh())
+	if (!GetAnimMesh())
 	{
 		LogMessage("No mesh for PlayBlendAnim");
 		return;
 	}
 
-	MeshAnimSeq* sequence = Mesh()->GetSequence(sequenceName);
+	MeshAnimSeq* sequence = GetAnimMesh()->GetSequence(sequenceName);
 	if (!sequence)
 	{
 		LogMessage("Sequence not found for PlayBlendAnim");
@@ -210,13 +215,13 @@ void UActor::TweenBlendAnim(const NameString& sequenceName, float time, int blen
 		LogMessage("Invalid channel for TweenBlendAnim!");
 		return;
 	}
-	if (!Mesh())
+	if (!GetAnimMesh())
 	{
 		LogMessage("No mesh for TweenBlendAnim");
 		return;
 	}
 
-	MeshAnimSeq* sequence = Mesh()->GetSequence(sequenceName);
+	MeshAnimSeq* sequence = GetAnimMesh()->GetSequence(sequenceName);
 	if (!sequence || sequence->Name != sequenceName)
 	{
 		LogMessage("TweenBlendAnim: Sequence '" + sequenceName.ToString() + "' not found in mesh for slot " + std::to_string(blendSlot));
@@ -246,9 +251,9 @@ void UActor::TweenBlendAnim(const NameString& sequenceName, float time, int blen
 
 void UActor::LoopAnim(const NameString& sequence, float rate, float tweenTime, float minRate)
 {
-	if (Mesh())
+	if (GetAnimMesh())
 	{
-		MeshAnimSeq* seq = Mesh()->GetSequence(sequence);
+		MeshAnimSeq* seq = GetAnimMesh()->GetSequence(sequence);
 		if (seq)
 		{
 			if (AnimSequence() == sequence && IsAnimating() && bAnimLoop())
@@ -297,9 +302,9 @@ void UActor::LoopAnim(const NameString& sequence, float rate, float tweenTime, f
 
 void UActor::TweenAnim(const NameString& sequence, float tweenTime)
 {
-	if (Mesh())
+	if (GetAnimMesh())
 	{
-		MeshAnimSeq* seq = Mesh()->GetSequence(sequence);
+		MeshAnimSeq* seq = GetAnimMesh()->GetSequence(sequence);
 		if (seq)
 		{
 			SetTweenFromAnimFrame();
@@ -320,30 +325,87 @@ void UActor::TweenAnim(const NameString& sequence, float tweenTime)
 
 void UActor::PlayAnim_HP(const NameString& Sequence, std::optional<float> Rate, std::optional<float> TweenTime, std::optional<EAnimType> Type, std::optional<NameString> RootBone)
 {
-	// Partial body playback (a root bone or AT_Combine) needs animation channels, which are not implemented yet.
-	// Until then a combined animation must not knock out the full body animation that is already running.
-	bool partial = (RootBone && !RootBone->IsNone()) || (Type && *Type == EAnimType::AT_Combine);
-	if (partial)
+	float rate = Rate ? *Rate : 1.0f;
+	float tweenTime = TweenTime ? *TweenTime : 0.0f;
+
+	// A root bone plays the animation on that bone and everything below it only
+	if (RootBone && !RootBone->IsNone())
 	{
-		LogUnimplemented("Actor.PlayAnim_HP with a root bone or AT_Combine");
-		if (IsAnimating())
+		if (UActor* channel = FindSkelChannel(*RootBone, true))
+		{
+			channel->PlayAnim(Sequence, rate, tweenTime);
 			return;
+		}
 	}
 
-	PlayAnim(Sequence, Rate ? *Rate : 1.0f, TweenTime ? *TweenTime : 0.0f);
+	PlayAnim(Sequence, rate, tweenTime);
+
+	// AT_Replace takes over the whole body. AT_Combine leaves the channels running on top.
+	if (!Type || *Type == EAnimType::AT_Replace)
+		StopSkelChannels();
 }
 
 void UActor::LoopAnim_HP(const NameString& Sequence, std::optional<float> Rate, std::optional<float> TweenTime, std::optional<float> MinRate, std::optional<EAnimType> Type, std::optional<NameString> RootBone)
 {
-	bool partial = (RootBone && !RootBone->IsNone()) || (Type && *Type == EAnimType::AT_Combine);
-	if (partial)
+	float rate = Rate ? *Rate : 1.0f;
+	float tweenTime = TweenTime ? *TweenTime : 0.0f;
+	float minRate = MinRate ? *MinRate : 0.0f;
+
+	if (RootBone && !RootBone->IsNone())
 	{
-		LogUnimplemented("Actor.LoopAnim_HP with a root bone or AT_Combine");
-		if (IsAnimating())
+		if (UActor* channel = FindSkelChannel(*RootBone, true))
+		{
+			channel->LoopAnim(Sequence, rate, tweenTime, minRate);
 			return;
+		}
 	}
 
-	LoopAnim(Sequence, Rate ? *Rate : 1.0f, TweenTime ? *TweenTime : 0.0f, MinRate ? *MinRate : 0.0f);
+	LoopAnim(Sequence, rate, tweenTime, minRate);
+
+	if (!Type || *Type == EAnimType::AT_Replace)
+		StopSkelChannels();
+}
+
+// The mesh whose sequences this actor plays. Animation channels have no mesh of their own.
+UMesh* UActor::GetAnimMesh()
+{
+	if (IsSkelChannel && Owner())
+		return Owner()->Mesh();
+	return Mesh();
+}
+
+UActor* UActor::FindSkelChannel(const NameString& rootBone, bool create)
+{
+	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
+	int bone = mesh ? mesh->FindBone(rootBone) : -1;
+	if (bone <= 0) // Not found, or the root of the skeleton: that is the actor itself
+		return nullptr;
+
+	for (UActor* child : ChildActors)
+	{
+		if (child && child->IsSkelChannel && !child->bDeleteMe() && child->SkelChannelRootBone == bone)
+			return child;
+	}
+
+	if (!create)
+		return nullptr;
+
+	UClass* channelClass = engine->packages->GetPackage("Engine")->GetClass("AnimChannel");
+	return CreateAnimChannel(channelClass, EAnimType::AT_Replace, rootBone, true);
+}
+
+void UActor::StopSkelChannels()
+{
+	for (UActor* child : ChildActors)
+	{
+		if (child && child->IsSkelChannel && !child->bDeleteMe())
+		{
+			child->AnimSequence() = NameString();
+			child->AnimRate() = 0.0f;
+			child->AnimFrame() = 0.0f;
+			child->bAnimLoop() = false;
+		}
+	}
 }
 
 mat4 UActor::GetMeshToWorldMatrix()
@@ -352,20 +414,13 @@ mat4 UActor::GetMeshToWorldMatrix()
 	return Mesh() ? objectToWorld * Mesh()->meshToObject : objectToWorld;
 }
 
-// Current bone transforms of a skeletal mesh actor, including the tween from the previous animation
-bool UActor::GetSkeletalPose(SkeletalPose& pose)
+// Pose of this actor's current sequence on the given mesh, including the tween from the previous animation.
+// Returns false if the actor has no sequence of that animation.
+bool UActor::GetSequencePose(USkeletalMesh* mesh, UAnimation* anim, SkeletalPose& pose)
 {
-	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
-	if (!mesh)
-		return false;
-
-	UAnimation* anim = (engine->LaunchInfo.IsHarryPotter1() && SkelAnim()) ? SkelAnim() : mesh->DefaultAnimation;
 	int move = anim ? anim->FindMove(AnimSequence()) : -1;
 	if (move < 0)
-	{
-		mesh->GetRefPose(pose);
-		return true;
-	}
+		return false;
 
 	const MeshAnimSeq& seq = anim->AnimSeqs[move];
 	float rate = seq.Rate > 0.0f ? seq.Rate : 30.0f;
@@ -389,6 +444,33 @@ bool UActor::GetSkeletalPose(SkeletalPose& pose)
 	return true;
 }
 
+// Current bone transforms of a skeletal mesh actor: its own animation with the animation channels applied on top
+bool UActor::GetSkeletalPose(SkeletalPose& pose)
+{
+	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
+	if (!mesh)
+		return false;
+
+	UAnimation* anim = (engine->LaunchInfo.IsHarryPotter1() && SkelAnim()) ? SkelAnim() : mesh->DefaultAnimation;
+	if (!GetSequencePose(mesh, anim, pose))
+		mesh->GetRefPose(pose);
+
+	for (UActor* child : ChildActors)
+	{
+		if (!child || !child->IsSkelChannel || child->bDeleteMe() || child->AnimSequence().IsNone())
+			continue;
+
+		SkeletalPose channelPose;
+		if (child->GetSequencePose(mesh, anim, channelPose))
+		{
+			Array<uint8_t> mask;
+			mesh->GetBoneMask(child->SkelChannelRootBone, mask);
+			USkeletalMesh::BlendPose(pose, channelPose, 1.0f, &mask);
+		}
+	}
+	return true;
+}
+
 bool UActor::GetSkeletalBoneMatrices(Array<mat4>& bones)
 {
 	SkeletalPose pose;
@@ -400,6 +482,9 @@ bool UActor::GetSkeletalBoneMatrices(Array<mat4>& bones)
 
 void UActor::TickAnimation(float elapsed)
 {
+	if (IsSkelChannel && SkelChannelTransient && !AnimSequence().IsNone() && AnimFrame() >= 0.0f && AnimRate() == 0.0f)
+		AnimSequence() = NameString();
+
 	if (StateFrame && StateFrame->GetLatentState() == LatentRunState::FinishAnim)
 	{
 		if (!IsAnimating() || AnimFrame() >= AnimLast())
@@ -421,9 +506,9 @@ void UActor::TickAnimation(float elapsed)
 			float toAnimTime = fromAnimTime + animRate * elapsed;
 
 			// Stop at the next notify event, if any
-			if (Mesh() && bAnimNotify())
+			if (GetAnimMesh() && bAnimNotify())
 			{
-				MeshAnimSeq* seq = Mesh()->GetSequence(AnimSequence());
+				MeshAnimSeq* seq = GetAnimMesh()->GetSequence(AnimSequence());
 				if (seq)
 				{
 					bool foundEvent = false;
@@ -603,19 +688,20 @@ void UActor::TickBlendAnimation(float elapsed)
 
 void UActor::SetTweenFromAnimFrame()
 {
-	if (UObject::TryCast<USkeletalMesh>(Mesh()))
+	UActor* poseActor = (IsSkelChannel && Owner()) ? Owner() : this;
+	if (UObject::TryCast<USkeletalMesh>(poseActor->Mesh()))
 	{
 		SkeletalPose pose;
-		if (GetSkeletalPose(pose))
+		if (poseActor->GetSkeletalPose(pose))
 		{
 			SkelTweenRotations = std::move(pose.Rotations);
 			SkelTweenPositions = std::move(pose.Positions);
 		}
 	}
 
-	if (Mesh())
+	if (GetAnimMesh())
 	{
-		MeshAnimSeq* seq = Mesh()->GetSequence(AnimSequence());
+		MeshAnimSeq* seq = GetAnimMesh()->GetSequence(AnimSequence());
 		if (seq)
 		{
 			float animFrame = std::max(AnimFrame(), 0.0f) * seq->NumFrames;
@@ -623,8 +709,8 @@ void UActor::SetTweenFromAnimFrame()
 			int frame1 = frame0 + 1;
 			frame0 = frame0 % seq->NumFrames;
 			frame1 = frame1 % seq->NumFrames;
-			TweenFromAnimFrame.V0 = (seq->StartFrame + frame0) * Mesh()->FrameVerts;
-			TweenFromAnimFrame.V1 = (seq->StartFrame + frame1) * Mesh()->FrameVerts;
+			TweenFromAnimFrame.V0 = (seq->StartFrame + frame0) * GetAnimMesh()->FrameVerts;
+			TweenFromAnimFrame.V1 = (seq->StartFrame + frame1) * GetAnimMesh()->FrameVerts;
 			TweenFromAnimFrame.T = animFrame - (float)frame0;
 		}
 		else // For safety. Should never happen.
@@ -641,7 +727,7 @@ void UActor::SetTweenFromBlendAnimFrame(int slot)
 	if (slot < 0 || slot > 3)
 		return;
 
-	if (!Mesh())
+	if (!GetAnimMesh())
 		return;
 
 	if (BlendAnimSequence()[slot].IsNone())
@@ -652,7 +738,7 @@ void UActor::SetTweenFromBlendAnimFrame(int slot)
 		return;
 	}
 
-	MeshAnimSeq* seq = Mesh()->GetSequence(BlendAnimSequence()[slot]);
+	MeshAnimSeq* seq = GetAnimMesh()->GetSequence(BlendAnimSequence()[slot]);
 	if (seq)
 	{
 		float frame = std::max(BlendAnimFrame()[slot], 0.0f) * seq->NumFrames;
@@ -660,8 +746,8 @@ void UActor::SetTweenFromBlendAnimFrame(int slot)
 		int frame1 = frame0 + 1;
 		frame0 = frame0 % seq->NumFrames;
 		frame1 = frame1 % seq->NumFrames;
-		TweenFromBlendAnimFrame[slot].V0 = (seq->StartFrame + frame0) * Mesh()->FrameVerts;
-		TweenFromBlendAnimFrame[slot].V1 = (seq->StartFrame + frame1) * Mesh()->FrameVerts;
+		TweenFromBlendAnimFrame[slot].V0 = (seq->StartFrame + frame0) * GetAnimMesh()->FrameVerts;
+		TweenFromBlendAnimFrame[slot].V1 = (seq->StartFrame + frame1) * GetAnimMesh()->FrameVerts;
 		TweenFromBlendAnimFrame[slot].T = frame - (float)frame0;
 	}
 	else
@@ -674,9 +760,20 @@ void UActor::SetTweenFromBlendAnimFrame(int slot)
 
 UActor* UActor::CreateAnimChannel(UClass* NewClass, EAnimType Type, const NameString& RootBone, bool bTransient)
 {
-	auto animChannel = Spawn(NewClass, {}, {}, {}, {});
-	LogUnimplemented("Actor.CreateAnimChannel");
-	return animChannel;
+	if (!NewClass)
+		return nullptr;
+
+	USkeletalMesh* mesh = UObject::TryCast<USkeletalMesh>(Mesh());
+	UActor* channel = Spawn(NewClass, this, {}, Location(), Rotation());
+	if (channel)
+	{
+		channel->IsSkelChannel = true;
+		channel->SkelChannelTransient = bTransient;
+		channel->SkelChannelRootBone = mesh ? mesh->FindBone(RootBone) : -1;
+		if (channel->SkelChannelRootBone < 0)
+			LogMessage("CreateAnimChannel: bone '" + RootBone.ToString() + "' not found on " + Name.ToString());
+	}
+	return channel;
 }
 
 int UActor::BoneNumber(const NameString& Bone)

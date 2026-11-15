@@ -306,6 +306,7 @@ void NObject::RegisterFunctions()
 	if (engine->LaunchInfo.IsHarryPotter1())
 	{
 		RegisterVMNativeFunc_1("Object", "GetLanguage", &NObject::GetLanguage, 0);
+		RegisterVMNativeFunc_3("Object", "Greater_StrStr", &NObject::Greater_StrStr, 116); // The game's Core.u declares string > as native 116
 	}
 
 	if (engine->LaunchInfo.IsUnrealTournament_469())

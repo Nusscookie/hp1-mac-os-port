@@ -48,6 +48,8 @@ public:
 
 	bool PlaySound(UActor* Actor, int Id, USound* Sound, vec3 Location, float Volume, float Radius, float Pitch);
 	void StopSound(UActor* Actor, int Id);
+	bool ModifyActorSound(UActor* Actor, USound* Sound, int Slot, int Parameter, float Value);
+	void StopActorSound(UActor* Actor, USound* Sound, int Slot);
 	void ActorDestroyed(UActor* Actor);
 	void StopSounds();
 

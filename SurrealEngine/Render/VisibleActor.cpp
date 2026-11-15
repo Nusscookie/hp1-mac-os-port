@@ -5,6 +5,7 @@
 #include "VisibleBrush.h"
 #include "VisibleMesh.h"
 #include "VisibleSprite.h"
+#include "Packages/Engine/Actors/ParticleFX.h"
 #include "Packages/Engine/UViewport.h"
 #include "Packages/Engine/Actors/Pawn/UPawn.h"
 #include "Packages/Engine/Actors/Pawn/UPlayerPawn.h"
@@ -84,6 +85,11 @@ void VisibleActor::Process(VisibleFrame* frame, UActor* actor)
 		Type = dt;
 		Actor = actor;
 		frame->Actors.push_back(*this);
+	}	else if (dt == DT_Particles && actor->ParticleState)
+	{
+		Type = dt;
+		Actor = actor;
+		frame->Actors.push_back(*this);
 	}
 }
 
@@ -98,7 +104,7 @@ void VisibleActor::DrawOpaque(VisibleFrame* frame)
 			frame->Translucents.emplace_back(*this, dot(v, v));
 		}
 	}
-	else if (Type == DT_Sprite || Type == DT_SpriteAnimOnce)
+	else if (Type == DT_Sprite || Type == DT_SpriteAnimOnce || Type == DT_Particles)
 	{
 		// Assume all sprites are translucent for now
 		vec3 v = Actor->Location() - frame->ViewLocation.xyz();
@@ -126,6 +132,10 @@ void VisibleActor::DrawTranslucent(VisibleFrame* frame)
 	{
 		VisibleSprite vissprite;
 		vissprite.Draw(frame, Actor);
+	}
+	else if (Type == DT_Particles)
+	{
+		ParticleFX::Draw(frame, Actor);
 	}
 	else if (Type == DT_Brush)
 	{

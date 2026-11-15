@@ -5,6 +5,7 @@
 #include "Utils/File.h"
 #include "VM/Frame.h"
 #include <unordered_set>
+#include <unordered_map>
 
 void LogMessage(const std::string& message)
 {
@@ -38,8 +39,16 @@ void Logger::LogMessage(const std::string& message)
 			name = UObject::GetUClassFullName(Frame::Callstack.front()->GetUObject()).ToString();
 		}
 
-		for (const std::string& text : SplitNewlines(message))
+		// Per-frame script errors (e.g. Paint accessing None every frame) would grow the log forever.
+		static std::unordered_map<std::string, int> repeats;
+		int& count = repeats[name + "\n" + message];
+		if (++count > MaxRepeats)
+			return;
+
+		for (std::string text : SplitNewlines(message))
 		{
+			if (count == MaxRepeats)
+				text += " (repeated " + std::to_string(MaxRepeats) + " times, further repeats suppressed)";
 			LogMessageLine line;
 			line.Time = time;
 			line.Source = name;

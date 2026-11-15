@@ -49,8 +49,10 @@ void UStructProperty::LoadStructMemberValue(void* data, ObjectStream* stream)
 
 	for (UProperty* fieldprop : Struct->Properties)
 	{
-		void* fielddata = (uint8_t*)data + fieldprop->DataOffset.DataOffset;
-		fieldprop->LoadStructMemberValue(fielddata, stream);
+		// Fixed size array members (var Foo Bar[8]) are stored element by element
+		uint8_t* fielddata = (uint8_t*)data + fieldprop->DataOffset.DataOffset;
+		for (int i = 0; i < fieldprop->ArrayDimension; i++)
+			fieldprop->LoadStructMemberValue(fielddata + i * fieldprop->ElementPitch(), stream);
 	}
 }
 
@@ -72,8 +74,9 @@ void UStructProperty::SaveStructMemberValue(void* data, PackageStreamWriter* str
 
 	for (UProperty* fieldprop : Struct->Properties)
 	{
-		void* fielddata = (uint8_t*)data + fieldprop->DataOffset.DataOffset;
-		fieldprop->SaveStructMemberValue(fielddata, stream);
+		uint8_t* fielddata = (uint8_t*)data + fieldprop->DataOffset.DataOffset;
+		for (int i = 0; i < fieldprop->ArrayDimension; i++)
+			fieldprop->SaveStructMemberValue(fielddata + i * fieldprop->ElementPitch(), stream);
 	}
 }
 

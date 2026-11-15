@@ -34,8 +34,8 @@ void RenderSubsystem::ResetCanvas()
 	Canvas.uiscale = std::max((engine->viewport->ViewportHeight() + vertResolution / 2) / vertResolution, 1);
 
 	SceneNode frame;
-	Canvas.Frame.XB = 0;
-	Canvas.Frame.YB = 0;
+	Canvas.Frame.XB = engine->viewport->ViewportX();
+	Canvas.Frame.YB = engine->viewport->ViewportY();
 	Canvas.Frame.X = engine->viewport->ViewportWidth();
 	Canvas.Frame.Y = engine->viewport->ViewportHeight();
 	Canvas.Frame.FX = (float)engine->viewport->ViewportWidth();

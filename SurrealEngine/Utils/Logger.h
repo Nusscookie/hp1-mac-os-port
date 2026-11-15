@@ -30,6 +30,7 @@ public:
 	static std::list<LogMessageLine> LoadLog(const std::string& filename);
 
 private:
+	static constexpr int MaxRepeats = 20;
 	float time = 0.0f;
 	std::list<LogMessageLine> Log;
 	std::function<void(const LogMessageLine& line)> printLogDebugger;

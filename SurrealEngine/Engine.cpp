@@ -1,6 +1,8 @@
 
 #include "Precomp.h"
 #include "Engine.h"
+#include "VM/NativeFunc.h"
+#include "Packages/Core/UFunction.h"
 #include "Utils/CommandLine.h"
 #include "Utils/File.h"
 #include "Utils/StrTools.h"
@@ -70,6 +72,8 @@ Engine* engine = nullptr;
 Engine::Engine(GameLaunchInfo launchinfo) : LaunchInfo(launchinfo)
 {
 	engine = this;
+
+	PropertyDataBlock::TolerateMissingProperties = LaunchInfo.IsHarryPotter1();
 
 	packages = std::make_unique<PackageManager>(LaunchInfo);
 
@@ -167,6 +171,128 @@ void Engine::SaveScreenshotBMP(const std::string& filename)
 	}
 
 	File::write_all_bytes(filename, file.data(), file.size());
+}
+
+// Scripted input for automated gameplay tests: --input="120:tap:Enter;200:click:0.44,0.78;300:shot:/tmp/a.bmp"
+//
+// Each event is tick:action:argument. Actions:
+//   press/release/tap  key name as used in the key bindings (Space, Enter, LeftMouse, W, ...)
+//   mouse/click        cursor position as a fraction of the window width and height
+//   rawmouse           relative mouse movement dx,dy
+//   shot               save a screenshot to the given file
+//   cmd                run a console command
+void Engine::LoadInputScript(const std::string& script)
+{
+	size_t pos = 0;
+	while (pos < script.size())
+	{
+		size_t end = script.find(';', pos);
+		if (end == std::string::npos)
+			end = script.size();
+		std::string item = script.substr(pos, end - pos);
+		pos = end + 1;
+
+		size_t c1 = item.find(':');
+		size_t c2 = (c1 != std::string::npos) ? item.find(':', c1 + 1) : std::string::npos;
+		if (c1 == std::string::npos)
+			continue;
+
+		InputScriptEvent ev;
+		ev.Tick = std::atoi(item.substr(0, c1).c_str());
+		ev.Action = item.substr(c1 + 1, c2 == std::string::npos ? std::string::npos : c2 - c1 - 1);
+		ev.Arg = (c2 != std::string::npos) ? item.substr(c2 + 1) : std::string();
+
+		if (ev.Action == "tap" || ev.Action == "click")
+		{
+			// A tap is a press followed by a release a few frames later
+			InputScriptEvent down = ev, up = ev;
+			down.Action = (ev.Action == "tap") ? "press" : "mousedown";
+			up.Action = (ev.Action == "tap") ? "release" : "mouseup";
+			up.Tick += 4;
+			inputScript.push_back(down);
+			inputScript.push_back(up);
+		}
+		else
+		{
+			inputScript.push_back(ev);
+		}
+	}
+}
+
+void Engine::RunInputScript(int tick)
+{
+	auto findKey = [](const std::string& name) -> int {
+		for (int i = 0; i < 256; i++)
+			if (StrTools::equals_ignore_case(keynames[i], name))
+				return i;
+		return -1;
+	};
+
+	auto parsePair = [](const std::string& arg, double& a, double& b) {
+		size_t comma = arg.find(',');
+		a = std::atof(arg.substr(0, comma).c_str());
+		b = (comma != std::string::npos) ? std::atof(arg.substr(comma + 1).c_str()) : 0.0;
+	};
+
+	auto toWindowPoint = [&](const std::string& arg) {
+		double fx, fy;
+		parsePair(arg, fx, fy);
+		double dpi = window->GetDpiScale();
+		return Point(fx * window->GetPixelWidth() / dpi, fy * window->GetPixelHeight() / dpi);
+	};
+
+	for (const InputScriptEvent& ev : inputScript)
+	{
+		if (ev.Tick != tick)
+			continue;
+
+		if (ev.Action == "press" || ev.Action == "release")
+		{
+			int key = findKey(ev.Arg);
+			if (key < 0)
+				LogMessage("Input script: unknown key " + ev.Arg);
+			else if (ev.Action == "press")
+				OnWindowKeyDown((EInputKey)key);
+			else
+				OnWindowKeyUp((EInputKey)key);
+		}
+		else if (ev.Action == "mouse")
+		{
+			OnWindowMouseMove(toWindowPoint(ev.Arg));
+		}
+		else if (ev.Action == "mousedown")
+		{
+			Point p = toWindowPoint(ev.Arg);
+			OnWindowMouseMove(p);
+			OnWindowMouseDown(p, IK_LeftMouse);
+		}
+		else if (ev.Action == "mouseup")
+		{
+			OnWindowMouseUp(toWindowPoint(ev.Arg), IK_LeftMouse);
+		}
+		else if (ev.Action == "rawmouse")
+		{
+			double dx, dy;
+			parsePair(ev.Arg, dx, dy);
+			OnWindowRawMouseMove((int)dx, (int)dy);
+		}
+		else if (ev.Action == "shot")
+		{
+			SaveScreenshotBMP(ev.Arg);
+		}
+		else if (ev.Action == "cmd")
+		{
+			uint32_t foundBits = 0;
+			BitfieldBool found;
+			found.Ptr = &foundBits;
+			found.Mask = 1;
+			ConsoleCommand(viewport->Actor(), ev.Arg, found);
+		}
+		else
+		{
+			LogMessage("Input script: unknown action " + ev.Action);
+		}
+	}
 }
 
 // --dumpmesh=Package.MeshName prints the skinning data layout of one skeletal mesh
@@ -307,6 +433,8 @@ void Engine::LoadAllPackagesTest()
 			catch (const std::exception& e)
 			{
 				std::string what = e.what();
+				if (commandline->HasArg("", "--verbose"))
+					std::cerr << "LOAD FAILURE DETAIL " << name.ToString() << "." << package->GetExportName(objref) << ": " << what << std::endl;
 				size_t eol = what.find('\n');
 				if (eol != std::string::npos)
 					what.resize(eol);
@@ -317,6 +445,33 @@ void Engine::LoadAllPackagesTest()
 			}
 		}
 	}
+
+	// Native functions declared by the game's scripts that have no implementation registered
+	int numMissingNatives = 0;
+	for (const NameString& name : packages->GetPackageNames())
+	{
+		Package* package = nullptr;
+		try { package = packages->GetPackage(name); } catch (...) { continue; }
+		for (UFunction* func : package->GetAllObjects<UFunction>())
+		{
+			if (!func || !AllFlags(func->FuncFlags, FunctionFlags::Native))
+				continue;
+			bool found = false;
+			if (func->NativeFuncIndex != 0)
+				found = (size_t)func->NativeFuncIndex < NativeFunctions::NativeByIndex.size() && NativeFunctions::NativeByIndex[func->NativeFuncIndex];
+			else if (func->NativeStruct)
+			{
+				auto it = NativeFunctions::NativeByName.find({ func->Name, func->NativeStruct->Name });
+				found = it != NativeFunctions::NativeByName.end() && it->second;
+			}
+			if (!found)
+			{
+				std::cerr << "NATIVE MISSING " << name.ToString() << "." << (func->NativeStruct ? func->NativeStruct->Name.ToString() : std::string("?")) << "." << func->Name.ToString() << " #" << func->NativeFuncIndex << std::endl;
+				numMissingNatives++;
+			}
+		}
+	}
+	std::cerr << "natives without implementation: " << numMissingNatives << std::endl;
 
 	for (const auto& it : failures)
 		std::cerr << "LOAD FAILED x" << it.second.first << ": " << it.first << " (first: " << it.second.second << ")" << std::endl;
@@ -339,6 +494,19 @@ void Engine::Run()
 	LoadKeybindings();
 	LogMessage("Loaded key bindings");
 	LogGamePackageSHA1Sums();
+
+	// --dumpdefaults=Package.Class prints the default property values of a class
+	std::string dumpDefaults = commandline->GetArg("", "--dumpdefaults", "");
+	if (!dumpDefaults.empty())
+	{
+		size_t dot = dumpDefaults.find('.');
+		UClass* cls = (dot != std::string::npos) ? packages->GetPackage(dumpDefaults.substr(0, dot))->GetClass(dumpDefaults.substr(dot + 1)) : nullptr;
+		if (cls)
+			std::cerr << "defaults of " << dumpDefaults << ":\n" << cls->GetDefaultObject<UObject>()->PrintProperties() << std::endl;
+		else
+			std::cerr << "class " << dumpDefaults << " not found" << std::endl;
+		return;
+	}
 
 	if (commandline->HasArg("", "--dumpmesh"))
 	{
@@ -388,11 +556,15 @@ void Engine::Run()
 	// Smoke testing: stop after a fixed number of frames
 	const int maxTicks = commandline->GetArgInt("", "--maxticks", 0);
 	int tickCount = 0;
+	LoadInputScript(commandline->GetArg("", "--input", ""));
 
 	while (!quit)
 	{
-		if (maxTicks > 0 && ++tickCount > maxTicks)
+		tickCount++;
+		if (maxTicks > 0 && tickCount > maxTicks)
 			break;
+
+		RunInputScript(tickCount);
 
 		// Main game loop should consist of these 4 steps:
 		// Tick everything
@@ -470,7 +642,18 @@ void Engine::Run()
 
 		UpdateAudio();
 
-		viewport->SetViewportRect(0, 0, engine->window->GetPixelWidth(), engine->window->GetPixelHeight());
+		if (LaunchInfo.IsHarryPotter1())
+		{
+			// The game's menus, HUD and cutscene bars are laid out for a 4:3 screen. Show it centered with black borders.
+			int pixelWidth = engine->window->GetPixelWidth();
+			int pixelHeight = engine->window->GetPixelHeight();
+			int gameWidth = std::min(pixelWidth, (int)std::round(pixelHeight * (4.0 / 3.0)));
+			viewport->SetViewportRect((pixelWidth - gameWidth) / 2, 0, gameWidth, pixelHeight);
+		}
+		else
+		{
+			viewport->SetViewportRect(0, 0, engine->window->GetPixelWidth(), engine->window->GetPixelHeight());
+		}
 		render->DrawGame(levelElapsed);
 
 		if (maxTicks > 0 && tickCount == maxTicks)
@@ -1009,6 +1192,22 @@ void Engine::LoadMap(const UnrealURL& url, const std::map<std::string, std::stri
 		if (!error.empty())
 			Exception::Throw("InitGame failed: " + error);
 
+		// UE1 sets every actor's zone from the BSP when a map is loaded. The Region saved in the map
+		// can be stale (Harry Potter 1 ships many actors saved with zone 0), which made pawns
+		// "fall out of the world" on their first physics tick.
+		for (size_t i = 0; i < Level->Actors.size(); i++)
+		{
+			UActor* actor = Level->Actors[i];
+			if (!actor || actor == GameInfo)
+				continue;
+			actor->Region() = actor->FindRegion();
+			if (UPawn* pawn = UObject::TryCast<UPawn>(actor))
+			{
+				pawn->FootRegion() = pawn->FindRegion({ 0.0f, 0.0f, -pawn->CollisionHeight() });
+				pawn->HeadRegion() = pawn->FindRegion({ 0.0f, 0.0f, pawn->EyeHeight() });
+			}
+		}
+
 		// Note: the events may spawn actors. We can't use iterators here.
 		// Spawned objects must be initialized twice.
 		// DX breaks if SetInitialState isn't called a second time on the spawned inventory after DeusExCarcass.PostBeginPlay finishes.
@@ -1457,6 +1656,17 @@ std::string Engine::ConsoleCommand(UObject* context, const std::string& commandl
 
 		UnrealURL url(maparg);
 
+		// Harry Potter 1 loads saves with "open saveN.usa" instead of "?load=N".
+		fs::path mapPath(url.Map);
+		std::string stem = mapPath.stem().string();
+		if (StrTools::equals_ignore_case(mapPath.extension().string(), "." + packages->GetSaveExtension()) &&
+			stem.size() > 4 && StrTools::equals_ignore_case(stem.substr(0, 4), "save") &&
+			std::all_of(stem.begin() + 4, stem.end(), [](char c) { return c >= '0' && c <= '9'; }))
+		{
+			ClientTravel("?load=" + stem.substr(4), ETravelType::TRAVEL_Absolute, false);
+			return {};
+		}
+
 		for (auto& map : packages->GetMaps())
 		{
 			std::string mapname = fs::path(map).stem().string();
@@ -1681,6 +1891,12 @@ std::string Engine::ConsoleCommand(UObject* context, const std::string& commandl
 		PlayAVI(args);
 		return {};
 	}
+	else if (command == "snap" && LaunchInfo.IsHarryPotter1())
+	{
+		// HP1 takes a screen snapshot before opening the menu book. The shipped game never uses it:
+		// save slot thumbnails come from Save/SGS <level>.bmp.
+		return {};
+	}
 	else if (command == "flush")
 	{
 		engine->render->Device->Flush(1);
@@ -1888,8 +2104,8 @@ void Engine::OnWindowMouseMove(const Point& pos)
 
 	if (engine->LaunchInfo.ue1Version > 219)
 	{
-		viewport->WindowsMouseX() = (float)(pos.x * window->GetDpiScale());
-		viewport->WindowsMouseY() = (float)(pos.y * window->GetDpiScale());
+		viewport->WindowsMouseX() = (float)(pos.x * window->GetDpiScale()) - (float)viewport->ViewportX();
+		viewport->WindowsMouseY() = (float)(pos.y * window->GetDpiScale()) - (float)viewport->ViewportY();
 	}
 }
 

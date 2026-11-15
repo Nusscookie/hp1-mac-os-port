@@ -130,7 +130,8 @@ enum EDrawType
 	DT_RopeSprite,
 	DT_VerticalSprite,
 	DT_Terraform,
-	DT_SpriteAnimOnce
+	DT_SpriteAnimOnce,
+	DT_Particles // Harry Potter 1
 };
 
 enum ERenderStyle
@@ -601,6 +602,19 @@ public:
 	Array<quaternion> SkelTweenRotations;
 	Array<vec3> SkelTweenPositions;
 	bool GetSkeletalPose(struct SkeletalPose& pose);
+	bool GetSequencePose(class USkeletalMesh* mesh, UAnimation* anim, struct SkeletalPose& pose);
+
+	// Particles of a Harry Potter 1 ParticleFX actor (see ParticleFX.cpp)
+	std::shared_ptr<struct ParticleSystemState> ParticleState;
+
+	// Animation channels: child actors that animate one bone and everything below it on their owner's mesh
+	bool IsSkelChannel = false;
+	bool SkelChannelTransient = false;
+	int SkelChannelRootBone = -1;
+	UMesh* GetAnimMesh();
+	UActor* FindSkelChannel(const NameString& rootBone, bool create);
+	void StopSkelChannels();
+	uint8_t& AnimBone() { return Value<uint8_t>(PropOffsets_Actor.AnimBone); }
 	bool GetSkeletalBoneMatrices(Array<mat4>& bones);
 	mat4 GetMeshToWorldMatrix();
 	void SetTweenFromBlendAnimFrame(int slot);

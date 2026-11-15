@@ -8,6 +8,7 @@
 #include "Packages/Engine/UViewport.h"
 #include "Packages/Engine/Resources/USound.h"
 #include "Packages/Engine/Resources/Level/ULevel.h"
+#include "Packages/Engine/Resources/Level/UModel.h"
 #include "Packages/Engine/Resources/Mesh/UMesh.h"
 #include "Packages/Engine/Actors/UActor.h"
 #include "Packages/Engine/Actors/UDecal.h"
@@ -149,6 +150,7 @@ void NActor::RegisterFunctions()
 		RegisterVMNativeFunc_5("Actor", "PlayAnim", &NActor::PlayAnim_HP, 259);
 		RegisterVMNativeFunc_6("Actor", "LoopAnim", &NActor::LoopAnim_HP, 260);
 		RegisterVMNativeFunc_2("Actor", "GetWorldCollisionBox", &NActor::GetWorldCollisionBox, 286);
+		RegisterVMNativeFunc_5("Actor", "TraceTexture", &NActor::TraceTexture_HP, 285);
 		RegisterVMNativeFunc_1("Actor", "GetRenderExtent", &NActor::GetRenderExtent, 274);
 		RegisterVMNativeFunc_5("Actor", "CreateAnimChannel", &NActor::CreateAnimChannel, 265);
 		RegisterVMNativeFunc_2("Actor", "BoneNumber", &NActor::BoneNumber, 268);
@@ -472,6 +474,24 @@ void NActor::LastRendered(UObject *Self, float &ReturnValue)
 	{  
 		ReturnValue = 0.0f; // UActor no tiene LastRenderedTime  
 	}  
+}
+
+// Harry Potter 1: texture of the world surface hit by a line, used to pick footstep sounds
+void NActor::TraceTexture_HP(UObject* Self, const vec3& TraceEnd, const vec3& TraceStart, int& Flags, std::optional<bool> bTraceDecals, UObject*& ReturnValue)
+{
+	UActor* SelfActor = UObject::Cast<UActor>(Self);
+	ReturnValue = nullptr;
+	Flags = 0;
+
+	TraceFlags flags;
+	flags.movers = true;
+	flags.world = true;
+	const auto hit = SelfActor->XLevel()->Collision.TraceFirstHit(TraceStart, TraceEnd, SelfActor, vec3(0.0f), flags);
+	if (!hit.Node)
+		return;
+
+	Flags = (int)hit.Node->NodeFlags;
+	ReturnValue = SelfActor->XLevel()->Model->Surfaces[hit.Node->Surf].Material;
 }
 
 void NActor::LinkSkelAnim(UObject* Self, UObject* Anim)
@@ -1130,6 +1150,6 @@ void NActor::IsOSVer2kOrXP(UObject* Self, BitfieldBool& ReturnValue)
 void NActor::StopSound_HP(UObject* Self, std::optional<UObject*> Sound, std::optional<uint8_t> Slot)
 {
 	UActor* SelfActor = UObject::Cast<UActor>(Self);
-	LogUnimplemented("Actor.StopSound");
-	// engine->audiodev->StopSound(SelfActor, Sound, Slot);
+	USound* sound = Sound ? UObject::TryCast<USound>(*Sound) : nullptr;
+	engine->audiodev->StopActorSound(SelfActor, sound, Slot ? (int)*Slot : -1);
 }

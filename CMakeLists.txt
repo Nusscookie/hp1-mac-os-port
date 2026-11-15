@@ -186,6 +186,8 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/Native/NScriptedTexture.h
 	SurrealEngine/Native/NObject.h
 	SurrealEngine/Native/NActor.cpp
+	SurrealEngine/Native/NHarryPotter.cpp
+	SurrealEngine/Native/NHarryPotter.h
 	SurrealEngine/Native/N227Emitter.h
 	SurrealEngine/Native/N227Emitter.cpp
 	SurrealEngine/Native/N227Projector.h
@@ -533,6 +535,8 @@ set(SURREALCOMMON_SOURCES
 	SurrealEngine/Packages/Engine/Actors/UActor_PhysSpider.cpp
 	SurrealEngine/Packages/Engine/Actors/UActor_PhysSwimming.cpp
 	SurrealEngine/Packages/Engine/Actors/UActor_PhysTrailer.cpp
+	SurrealEngine/Packages/Engine/Actors/ParticleFX.cpp
+	SurrealEngine/Packages/Engine/Actors/ParticleFX.h
 	SurrealEngine/Packages/Engine/Actors/UActor_PhysWalking.cpp
 	SurrealEngine/Packages/Engine/Actors/UActor_Render.cpp
 	SurrealEngine/Packages/Engine/Actors/UActor_Touch.cpp

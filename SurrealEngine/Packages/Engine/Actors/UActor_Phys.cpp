@@ -170,6 +170,10 @@ bool UActor::HasLeftWorld()
 	if (Region().ZoneNumber != 0)
 		return false;
 
+	std::string probe;
+	for (float dz : { -16.0f, 8.0f, 32.0f, 64.0f })
+		probe += " z" + std::to_string((int)dz) + ":" + std::to_string(FindRegion(vec3(0.0f, 0.0f, dz)).ZoneNumber);
+	LogMessage("Fell out of world: " + Name.ToString() + " physics=" + std::to_string((int)Physics()) + " location=" + std::to_string(Location().x) + "," + std::to_string(Location().y) + "," + std::to_string(Location().z) + " bCollideWorld=" + std::to_string((int)bCollideWorld()) + " colh=" + std::to_string(CollisionHeight()) + " zones" + probe);
 	CallEvent(this, EventName::FellOutOfWorld);
 	return true;
 }
@@ -215,7 +219,9 @@ UPawn* UActor::PreparePawnMovementTick()
 	if (!pawn)
 		return nullptr;
 
-	if (HasLeftWorld())
+	// Actors that fly without world collision (ghosts such as Peeves in Harry Potter 1) pass through the void on purpose
+	bool ghost = Physics() == PHYS_Flying && !bCollideWorld();
+	if (!ghost && HasLeftWorld())
 		return nullptr;
 
 	OldLocation() = Location();

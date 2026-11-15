@@ -257,6 +257,16 @@ public:
 	size_t Size = 0;
 	UClass* Class = nullptr;
 
+	// Some games (Harry Potter 1) removed properties the engine code refers to, such as Actor.OldAnimRate.
+	// When enabled, those read as zero and writes to them are dropped instead of aborting the script call.
+	static bool TolerateMissingProperties;
+	static void* MissingPropertyData()
+	{
+		alignas(16) static uint8_t scratch[64];
+		memset(scratch, 0, sizeof(scratch));
+		return scratch;
+	}
+
 private:
 	void Reset();
 
@@ -470,6 +480,8 @@ inline void* PropertyDataBlock::Ptr(size_t offset)
 {
 	if (offset < Size)
 		return static_cast<uint8_t*>(Data) + offset;
+	if (offset == ~(size_t)0 && TolerateMissingProperties)
+		return MissingPropertyData();
 	Exception::Throw("Property offset out of bounds!");
 }
 
@@ -477,5 +489,7 @@ inline const void* PropertyDataBlock::Ptr(size_t offset) const
 {
 	if (offset < Size)
 		return static_cast<const uint8_t*>(Data) + offset;
+	if (offset == ~(size_t)0 && TolerateMissingProperties)
+		return MissingPropertyData();
 	Exception::Throw("Property offset out of bounds!");
 }

@@ -833,6 +833,7 @@ CrashDumpInfo CrashReporter::GetCrashDumpInfo(const std::string& dumpFilename)
 #include <signal.h>
 #include <unistd.h>
 #include <libproc.h>
+#include <execinfo.h>
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -999,11 +1000,22 @@ static void crash_catcher(int signum, siginfo_t* siginfo, void* /*context*/)
 		close(fd);
 	}
 
+	{
+		// Native stack on stderr, so headless test runs show where they crashed.
+		static const char header[] = "\n* Native backtrace:\n";
+		safe_write(2, header, sizeof(header) - 1);
+		void* frames[64];
+		int count = backtrace(frames, 64);
+		backtrace_symbols_fd(frames, count, 2);
+	}
+
 	// the callback is not async safe and may cause a deadlock.
 	// the alarm() call above kills the process after a timeout if a deadlock occurs.
 	saveLogCallback(logFileFullname);
 
-	if(!selfExePath.empty() && haveCrashInfo)
+	// SURREAL_NO_CRASH_WINDOW=1: automated runs skip the crash report window.
+	const char* noWindow = getenv("SURREAL_NO_CRASH_WINDOW");
+	if(!selfExePath.empty() && haveCrashInfo && !(noWindow && *noWindow && *noWindow != '0'))
 	{
 		pid_t child = fork();
 		if(child == 0)

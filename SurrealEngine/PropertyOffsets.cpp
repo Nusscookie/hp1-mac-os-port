@@ -299,6 +299,7 @@ static void InitPropertyOffsets_Actor(PackageManager* packages)
 	PropOffsets_Actor.Acceleration = cls->GetPropertyDataOffset("Acceleration");
 	PropOffsets_Actor.AmbientGlow = cls->GetPropertyDataOffset("AmbientGlow");
 	PropOffsets_Actor.AmbientSound = cls->GetPropertyDataOffset("AmbientSound");
+	PropOffsets_Actor.AnimBone = cls->GetPropertyDataOffset("AnimBone");
 	PropOffsets_Actor.AnimFrame = cls->GetPropertyDataOffset("AnimFrame");
 	PropOffsets_Actor.AnimLast = cls->GetPropertyDataOffset("AnimLast");
 	PropOffsets_Actor.AnimMinRate = cls->GetPropertyDataOffset("AnimMinRate");

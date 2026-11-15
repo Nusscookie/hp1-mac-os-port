@@ -74,6 +74,16 @@ public:
 	void SaveScreenshotBMP(const std::string& filename);
 	void LoadAllPackagesTest();
 	void DumpSkeletalMesh();
+
+	struct InputScriptEvent
+	{
+		int Tick = 0;
+		std::string Action;
+		std::string Arg;
+	};
+	Array<InputScriptEvent> inputScript;
+	void LoadInputScript(const std::string& script);
+	void RunInputScript(int tick);
 	void ClientTravel(const std::string& URL, ETravelType travelType, bool transferItems);
 	UnrealURL GetDefaultURL(const std::string& map);
 	void LoadEntryMap();

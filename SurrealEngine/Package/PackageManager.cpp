@@ -245,6 +245,7 @@
 #include "Packages/RMusicPlayer/URMusic_Player.h"
 #include "Packages/UPak/UPathNodeIterator.h"
 #include "Packages/UPak/UPawnPathNodeIterator.h"
+#include "Native/NHarryPotter.h"
 #include "Native/NActor.h"
 #include "Native/N227Emitter.h"
 #include "Native/N227Projector.h"
@@ -1105,6 +1106,8 @@ void PackageManager::RegisterFunctions()
 	}
 
 	NActor::RegisterFunctions();
+	if (launchInfo.IsHarryPotter1())
+		NHarryPotter::RegisterFunctions();
 	NCanvas::RegisterFunctions();
 	NCommandlet::RegisterFunctions();
 	NConsole::RegisterFunctions();

@@ -520,6 +520,10 @@ ExpressionEvalResult Frame::Run()
 
 		if (instructionsRetired >= maxInstructions)
 		{
+			// Without a debugger attached Break() returns immediately and the loop would spin forever.
+			// Abort the script call like any other script error instead.
+			if (!RunDebugger)
+				ThrowException("Runaway loop: too many VM instructions executed in a single tick");
 			LogMessage("Too many VM instructions executed in a single tick");
 			Break();
 		}

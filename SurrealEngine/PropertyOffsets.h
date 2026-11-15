@@ -252,6 +252,7 @@ struct PropertyOffsets_Actor
 	PropertyDataOffset Acceleration;
 	PropertyDataOffset AmbientGlow;
 	PropertyDataOffset AmbientSound;
+	PropertyDataOffset AnimBone;
 	PropertyDataOffset AnimFrame;
 	PropertyDataOffset AnimLast;
 	PropertyDataOffset AnimMinRate;

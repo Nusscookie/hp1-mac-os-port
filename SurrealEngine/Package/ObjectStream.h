@@ -90,6 +90,20 @@ public:
 		if (GetVersion() >= 64)
 		{
 			int len = ReadIndex();
+			if (len < 0 && len >= -1024 * 1024)
+			{
+				// A negative length marks a UTF-16 string. Strings are kept as single byte text everywhere else,
+				// so keep what fits in Latin-1 (accented letters) and replace the rest.
+				std::string result;
+				for (int i = 0; i < -len; i++)
+				{
+					uint16_t c = ReadUInt16();
+					if (c == 0)
+						continue;
+					result.push_back(c < 256 ? (char)c : '?');
+				}
+				return result;
+			}
 			if (len < 0 || len > 1024 * 1024)
 				Exception::Throw("ObjectStream::ReadString: Invalid size in " + package->GetPackageName().ToString());
 			Array<char> s;

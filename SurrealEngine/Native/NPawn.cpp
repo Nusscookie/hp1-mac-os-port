@@ -73,6 +73,16 @@ void NPawn::RegisterFunctions()
 void NPawn::AddPawn(UObject* Self)
 {
 	UPawn* SelfPawn = UObject::Cast<UPawn>(Self);
+
+	// Adding a pawn that is already linked (some Harry Potter 1 maps were saved with a pawn list) would close
+	// the list into a loop, and every script walking Level.PawnList would then never finish.
+	int guard = 0;
+	for (UPawn* cur = SelfPawn->Level()->PawnList(); cur != nullptr && guard < 100000; cur = cur->nextPawn(), guard++)
+	{
+		if (cur == SelfPawn)
+			return;
+	}
+
 	SelfPawn->nextPawn() = SelfPawn->Level()->PawnList();
 	SelfPawn->Level()->PawnList() = SelfPawn;
 }

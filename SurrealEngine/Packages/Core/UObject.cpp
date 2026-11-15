@@ -22,6 +22,7 @@ UObject::~UObject()
 {
 }
 
+bool PropertyDataBlock::TolerateMissingProperties = false;
 bool UObject::CheckLoadedSize = false;
 std::map<std::string, UObject::UnreadInfo> UObject::UnreadObjects;
 
@@ -33,7 +34,26 @@ void UObject::LoadNow()
 		auto stream = info->package->OpenObjectStream(info->Index, info->ObjName, info->Class);
 		if (!stream->IsEmptyStream())
 		{
-			Load(stream.get());
+			if (CheckLoadedSize)
+			{
+				// Name the object that actually failed; delay loading runs many objects under one request
+				try
+				{
+					Load(stream.get());
+				}
+				catch (const std::exception& e)
+				{
+					std::string what = e.what();
+					size_t eol = what.find('\n');
+					if (eol != std::string::npos)
+						what.resize(eol);
+					Exception::Throw(what + " [while loading " + (Class ? Class->Name.ToString() : std::string("Class")) + " " + info->package->GetPackageName().ToString() + "." + Name.ToString() + "]");
+				}
+			}
+			else
+			{
+				Load(stream.get());
+			}
 			SetObject("Outer", info->Outer);
 
 			// Load verification (--loadall): a loader that leaves bytes behind does not understand the format

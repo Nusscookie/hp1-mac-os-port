@@ -39,6 +39,7 @@ public:
 	static void IsOverlapping(UObject* Self, UObject* checkActor, BitfieldBool& ReturnValue);
 	static void LastRendered(UObject* Self, float& ReturnValue);
 	static void LinkSkelAnim(UObject* Self, UObject* Anim);
+	static void TraceTexture_HP(UObject* Self, const vec3& TraceEnd, const vec3& TraceStart, int& Flags, std::optional<bool> bTraceDecals, UObject*& ReturnValue);
 	static void LoopAnim(UObject* Self, const NameString& Sequence, std::optional<float> Rate, std::optional<float> TweenTime, std::optional<float> MinRate);
 	static void MakeNoise(UObject* Self, float Loudness);
 	static void Move(UObject* Self, const vec3& Delta, BitfieldBool& ReturnValue);
