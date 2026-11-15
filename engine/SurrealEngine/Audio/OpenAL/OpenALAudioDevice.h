@@ -26,6 +26,7 @@ public:
 	void StopSound(int channel) override;
 	void SetMusicVolume(float volume) override;
 	void Update() override;
+	void SetPaused(bool paused) override;
 
 private:
 	std::string getALErrorString();

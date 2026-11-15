@@ -88,11 +88,22 @@ void VisibleFrame::SetupSceneFrame(const mat4& worldToView)
 		Frame.FY = h;
 	}
 
+	Frame.FovAngle = engine->CameraFovAngle;
+	if (engine->HP1WideScene && !engine->dxRootWindow)
+	{
+		// Widen the view to the whole window and keep the vertical field of view of the 4:3 viewport.
+		float baseAspect = Frame.FX / Frame.FY;
+		Frame.XB = engine->HP1SceneX;
+		Frame.X = engine->HP1SceneWidth;
+		Frame.FX = (float)engine->HP1SceneWidth;
+		float wideAspect = Frame.FX / Frame.FY;
+		Frame.FovAngle = degrees(2.0f * std::atan(std::tan(radians(Frame.FovAngle) * 0.5f) * wideAspect / baseAspect));
+	}
+
 	Frame.FX2 = Frame.FX * 0.5f;
 	Frame.FY2 = Frame.FY * 0.5f;
 	Frame.ObjectToWorld = mat4::identity();
 	Frame.WorldToView = worldToView;
-	Frame.FovAngle = engine->CameraFovAngle;
 	float Aspect = Frame.FY / Frame.FX;
 	float RProjZ = (float)std::tan(radians(Frame.FovAngle) * 0.5f);
 	float RFX2 = 2.0f * RProjZ / Frame.FX;

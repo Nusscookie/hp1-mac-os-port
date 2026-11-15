@@ -335,7 +335,7 @@ void USurrealAudioDevice::UpdateSounds()
 				Playing.Location = Playing.Actor->Location();
 
 			// Global volume for the sound type
-			float globalVolume = SoundVolume / 255.0f * 0.5f;
+			float globalVolume = MuteSounds ? 0.0f : SoundVolume / 255.0f * 0.5f;
 			if (engine->LaunchInfo.IsDeusEx() && GetSoundSlot(Playing.Id) == SLOT_Talk)
 				globalVolume = SpeechVolume / 255.0f * 0.5f;
 

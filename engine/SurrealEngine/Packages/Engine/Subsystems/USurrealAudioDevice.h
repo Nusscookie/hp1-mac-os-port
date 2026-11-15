@@ -41,6 +41,9 @@ public:
 
 	std::string Class = "Engine.SurrealAudioDevice";
 
+	// Silences sound effects and voices (not music) without touching the volume setting, e.g. while skipping a cutscene.
+	bool MuteSounds = false;
+
 	void InitDevice();
 	void ShutdownDevice();
 	void SetViewport(UViewport* InViewport);
@@ -57,6 +60,7 @@ public:
 	void AddStats(Array<std::string>& lines);
 
 	void SetInstantMusicVolume(uint8_t newMusicVolume);
+	void SetPaused(bool paused) { if (m_Device) m_Device->SetPaused(paused); }
 	void SetInstantSoundVolume(uint8_t newSoundVolume);
 	void SetInstantSpeechVolume(uint8_t newSpeechVolume);
 

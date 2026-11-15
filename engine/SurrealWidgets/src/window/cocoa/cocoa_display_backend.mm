@@ -46,6 +46,77 @@ std::unique_ptr<DisplayBackend> DisplayBackend::TryCreateCocoa()
     return std::make_unique<CocoaDisplayBackend>();
 }
 
+// Quitting (Cmd+Q, the Dock menu, logging out) asks the windows to close instead of exiting
+// on the spot, so the game can save its settings and shut down by itself.
+@interface ZWidgetAppDelegate : NSObject <NSApplicationDelegate>
+@end
+
+@implementation ZWidgetAppDelegate
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+    bool asked = false;
+    for (NSWindow* window in [NSApp windows])
+    {
+        id<NSWindowDelegate> delegate = [window delegate];
+        if ([window isVisible] && delegate && [delegate respondsToSelector:@selector(windowShouldClose:)])
+        {
+            if ([delegate windowShouldClose:window])
+                [window close];
+            asked = true;
+        }
+    }
+    return asked ? NSTerminateCancel : NSTerminateNow;
+}
+@end
+
+static ZWidgetAppDelegate* appDelegate = nil;
+
+static NSMenuItem* AddMenuItem(NSMenu* menu, NSString* title, SEL action, NSString* key, NSEventModifierFlags modifiers = NSEventModifierFlagCommand)
+{
+    NSMenuItem* item = [menu addItemWithTitle:title action:action keyEquivalent:key];
+    [item setKeyEquivalentModifierMask:modifiers];
+    return item;
+}
+
+static void CreateMainMenu()
+{
+    NSString* appName = [[NSRunningApplication currentApplication] localizedName];
+    if (!appName)
+        appName = [[NSProcessInfo processInfo] processName];
+
+    NSMenu* mainMenu = [[NSMenu alloc] init];
+
+    NSMenuItem* appItem = [mainMenu addItemWithTitle:@"" action:nil keyEquivalent:@""];
+    NSMenu* appMenu = [[NSMenu alloc] initWithTitle:appName];
+    AddMenuItem(appMenu, [@"Hide " stringByAppendingString:appName], @selector(hide:), @"h");
+    AddMenuItem(appMenu, @"Hide Others", @selector(hideOtherApplications:), @"h", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+    AddMenuItem(appMenu, @"Show All", @selector(unhideAllApplications:), @"");
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    AddMenuItem(appMenu, [@"Quit " stringByAppendingString:appName], @selector(terminate:), @"q");
+    [appItem setSubmenu:appMenu];
+
+    NSMenuItem* viewItem = [mainMenu addItemWithTitle:@"" action:nil keyEquivalent:@""];
+    NSMenu* viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
+    AddMenuItem(viewMenu, @"Enter Full Screen", @selector(toggleFullScreen:), @"f");
+    // The standard Ctrl+Cmd+F works too, without a second visible entry.
+    NSMenuItem* standardFullscreen = AddMenuItem(viewMenu, @"Toggle Full Screen", @selector(toggleFullScreen:), @"f", NSEventModifierFlagCommand | NSEventModifierFlagControl);
+    [standardFullscreen setHidden:YES];
+    if ([standardFullscreen respondsToSelector:@selector(setAllowsKeyEquivalentWhenHidden:)])
+        [standardFullscreen setAllowsKeyEquivalentWhenHidden:YES];
+    [viewItem setSubmenu:viewMenu];
+
+    NSMenuItem* windowItem = [mainMenu addItemWithTitle:@"" action:nil keyEquivalent:@""];
+    NSMenu* windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+    AddMenuItem(windowMenu, @"Minimize", @selector(performMiniaturize:), @"m");
+    [windowItem setSubmenu:windowMenu];
+
+    [NSApp setMainMenu:mainMenu];
+    [NSApp setWindowsMenu:windowMenu];
+
+    appDelegate = [[ZWidgetAppDelegate alloc] init];
+    [NSApp setDelegate:appDelegate];
+}
+
 CocoaDisplayBackend::CocoaDisplayBackend()
 {
     // Initialize NSApp if not already done
@@ -56,6 +127,7 @@ CocoaDisplayBackend::CocoaDisplayBackend()
     {
         // We're the primary app - set activation policy for keyboard events
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        CreateMainMenu();
         [NSApp finishLaunching];
     }
     // else: Parent app is managing NSApp lifecycle, don't interfere

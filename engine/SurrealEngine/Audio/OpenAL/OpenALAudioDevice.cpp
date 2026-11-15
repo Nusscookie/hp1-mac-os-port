@@ -271,6 +271,16 @@ void OpenALAudioDevice::SetMusicVolume(float volume)
 	alSourcef(alMusicSource, AL_GAIN, volume);
 }
 
+void OpenALAudioDevice::SetPaused(bool paused)
+{
+	// Freezes every sound and the music where they are, so nothing is missed (ALC_SOFT_pause_device)
+	if (!alcIsExtensionPresent(alDevice, "ALC_SOFT_pause_device"))
+		return;
+	auto pauseDevice = (void(ALC_APIENTRY*)(ALCdevice*))alcGetProcAddress(alDevice, paused ? "alcDevicePauseSOFT" : "alcDeviceResumeSOFT");
+	if (pauseDevice)
+		pauseDevice(alDevice);
+}
+
 void OpenALAudioDevice::Update()
 {
 	// The listener stays at the OpenAL origin facing -z; sources are positioned relative to it.

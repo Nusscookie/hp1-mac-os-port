@@ -111,6 +111,7 @@ private:
 		int framesDrawn = 0;
 		uint64_t startFPSTime = 0;
 		SceneNode Frame;
+		SceneNode WideFrame; // HP1 widescreen: whole window, for full-width bars and fades
 	} Canvas;
 
 	// Unreal 227

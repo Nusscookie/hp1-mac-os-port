@@ -152,6 +152,18 @@ void GameWindow::OnLostFocus()
 	windowHost->OnWindowDeactivated();
 }
 
+void GameWindow::OnWindowActivated()
+{
+	Widget::OnWindowActivated();
+	windowHost->OnWindowActivated();
+}
+
+void GameWindow::OnWindowDeactivated()
+{
+	Widget::OnWindowDeactivated();
+	windowHost->OnWindowDeactivated();
+}
+
 std::unique_ptr<GameWindow> GameWindow::Create(GameWindowHost* windowHost)
 {
 	RenderAPI api;

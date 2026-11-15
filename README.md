@@ -44,8 +44,13 @@ folder inside the game folder, as in the original.
 
 You can move `HP1.app` to your Applications folder or the Dock.
 
-Press Space, Enter, Esc or click to skip the startup logos and the storybook pages (the original only allowed this
-in its hidden debug mode).
+### Mac extras
+
+- **Skipping:** press Space, Enter, Esc or click to skip the startup logos and the storybook pages, and Space, Enter
+  or Esc to skip in-game cutscenes (the original only allowed this in its hidden debug mode).
+- **Widescreen:** the 3D view fills widescreen displays, while menus and the HUD keep the original 4:3 layout.
+- **Mac shortcuts:** Cmd+Q quits (and saves your settings), Cmd+F or Ctrl+Cmd+F switches between full screen and a
+  window, Cmd+M minimizes. Switching to another app (Cmd+Tab) pauses the game and its sound and frees the mouse.
 
 ## Is this legal?
 

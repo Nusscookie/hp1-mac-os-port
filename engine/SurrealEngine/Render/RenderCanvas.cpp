@@ -51,6 +51,17 @@ void RenderSubsystem::ResetCanvas()
 	float RFY2 = 2.0f * RProjZ * Aspect / Canvas.Frame.FY;
 	Canvas.Frame.Projection = mat4::frustum(-RProjZ, RProjZ, -Aspect * RProjZ, Aspect * RProjZ, 1.0f, 32768.0f, handedness::left, clipzrange::zero_positive_w);
 
+	Canvas.WideFrame = Canvas.Frame;
+	if (engine->HP1WideScene)
+	{
+		Canvas.WideFrame.XB = engine->HP1SceneX;
+		Canvas.WideFrame.X = engine->HP1SceneWidth;
+		Canvas.WideFrame.FX = (float)engine->HP1SceneWidth;
+		Canvas.WideFrame.FX2 = Canvas.WideFrame.FX * 0.5f;
+		float wideAspect = Canvas.WideFrame.FY / Canvas.WideFrame.FX;
+		Canvas.WideFrame.Projection = mat4::frustum(-RProjZ, RProjZ, -wideAspect * RProjZ, wideAspect * RProjZ, 1.0f, 32768.0f, handedness::left, clipzrange::zero_positive_w);
+	}
+
 	int sizeX = (int)(engine->viewport->ViewportWidth() / (float)Canvas.uiscale);
 	int sizeY = (int)(engine->viewport->ViewportHeight() / (float)Canvas.uiscale);
 	engine->canvas->CurX() = 0.0f;
@@ -198,6 +209,18 @@ void RenderSubsystem::DrawTile(UTexture* Tex, float x, float y, float XL, float 
 
 	if (Tex->bMasked())
 		flags |= PF_Masked;
+
+	// HP1 widescreen: a solid-color tile across the whole 4:3 canvas (cutscene letterbox bars, fades) is
+	// stretched over the whole window so it also covers the wider 3D view.
+	float canvasWidth = Canvas.Frame.FX / Canvas.uiscale;
+	bool solid = (UL <= 2.0f && VL <= 2.0f) || (Tex->USize() <= 8 && Tex->VSize() <= 8);
+	if (engine->HP1WideScene && solid && x <= 0.5f && x + XL >= canvasWidth - 0.5f)
+	{
+		Device->SetSceneNode(&Canvas.WideFrame);
+		Device->DrawTile(&Canvas.WideFrame, texinfo, 0.0f, y * Canvas.uiscale, Canvas.WideFrame.FX, YL * Canvas.uiscale, U, V, UL, VL, Z, color, fog, flags);
+		Device->SetSceneNode(&Canvas.Frame);
+		return;
+	}
 
 	Device->DrawTile(&Canvas.Frame, texinfo, x * Canvas.uiscale, y * Canvas.uiscale, XL * Canvas.uiscale, YL * Canvas.uiscale, U, V, UL, VL, Z, color, fog, flags);
 }

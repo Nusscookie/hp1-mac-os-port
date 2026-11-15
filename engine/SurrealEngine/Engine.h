@@ -124,6 +124,15 @@ public:
 	bool HP1SkipIntro(EInputKey key);
 	void HP1UpdateSkip();
 	UObject* HP1SkippedStoryPage = nullptr;
+	UObject* HP1CurrentCutscene();
+	void HP1StopCutsceneSkip();
+	bool HP1SkippingCutscene = false;
+
+	// HP1 widescreen: the 3D scene fills the window (SceneX/SceneWidth in pixels) while the HUD and menus
+	// stay in the centered 4:3 viewport rect.
+	bool HP1WideScene = false;
+	int HP1SceneX = 0;
+	int HP1SceneWidth = 0;
 	void ReleaseAllInput();
 
 	void OnWindowPaint() override;
@@ -252,6 +261,7 @@ private:
 
 	bool m_EditorMode = false; // Set this to true to allow rendering of invisible polys.
 	bool m_GamePaused = false;
+	bool WindowInactive = false; // the player switched to another app
 
 	bool m_DrawDebugDXWindowHierarchy = false; // If set to true, engine will show the Deus Ex window hierarchy
 

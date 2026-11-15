@@ -27,4 +27,5 @@ public:
 	virtual void StopSound(int channel) = 0;
 	virtual void SetMusicVolume(float volume) = 0;
 	virtual void Update() = 0;
+	virtual void SetPaused(bool paused) {}
 };

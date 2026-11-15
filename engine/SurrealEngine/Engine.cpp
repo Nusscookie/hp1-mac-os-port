@@ -599,9 +599,14 @@ void Engine::Run()
 		if (LaunchInfo.IsUnreal1_227() && viewport->Actor())
 			currentZoneTimeDilation = viewport->Actor()->PlayerReplicationInfo()->PlayerZone()->ZoneTimeDilation();
 
+		// In the background: draw only a few frames a second and freeze the game clock.
+		// Window events (UpdateInput) still run on real time so the game notices when it is brought back.
+		if (WindowInactive)
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		float realTimeElapsed = CalcTimeElapsed();
-		float entryLevelElapsed = EntryLevel ? realTimeElapsed * clamp(EntryLevelInfo->TimeDilation() * currentZoneTimeDilation, 0.0025f, 25.0f) : 0.0f;
-		float levelElapsed = realTimeElapsed * clamp(LevelInfo->TimeDilation() * currentZoneTimeDilation, 0.0025f, 25.0f);
+		float gameTimeElapsed = WindowInactive ? 0.0f : realTimeElapsed;
+		float entryLevelElapsed = EntryLevel ? gameTimeElapsed * clamp(EntryLevelInfo->TimeDilation() * currentZoneTimeDilation, 0.0025f, 25.0f) : 0.0f;
+		float levelElapsed = gameTimeElapsed * clamp(LevelInfo->TimeDilation() * currentZoneTimeDilation, 0.0025f, 25.0f);
 
 		TotalTime += realTimeElapsed;
 
@@ -634,7 +639,7 @@ void Engine::Run()
 
 		UpdateInput(realTimeElapsed);
 
-		SetPause(!LevelInfo->Pauser().empty());
+		SetPause(!LevelInfo->Pauser().empty() || WindowInactive);
 
 		// Do NOT pause this Tick event otherwise some messages will stay on screen forever.
 		CallEvent(console, EventName::Tick, { ExpressionValue::FloatValue(levelElapsed) });
@@ -642,6 +647,17 @@ void Engine::Run()
 		if (EntryLevel && EntryLevel != Level)
 			EntryLevel->Tick(entryLevelElapsed, m_GamePaused);
 		Level->Tick(levelElapsed, m_GamePaused);
+
+		// Skipping an HP1 cutscene: run the level at 10x speed (in normal-sized steps) until it ends.
+		for (int step = 1; HP1SkippingCutscene && step < 10; step++)
+		{
+			if (!HP1CurrentCutscene() || !LevelInfo->NextURL().empty())
+			{
+				HP1StopCutsceneSkip();
+				break;
+			}
+			Level->Tick(levelElapsed, m_GamePaused);
+		}
 
 		if (dxRootWindow)
 			dxRootWindow->Tick(levelElapsed); // Should this maybe be realTimeElapsed?
@@ -669,11 +685,17 @@ void Engine::Run()
 		{
 			HP1UpdateSkip();
 
-			// The game's menus, HUD and cutscene bars are laid out for a 4:3 screen. Show it centered with black borders.
+			// The game's menus and HUD are laid out for a 4:3 screen, so they stay in a centered 4:3 rect.
+			// During play the 3D view fills the whole window (Hor+: same vertical view, more on the sides);
+			// with a menu open the world stays 4:3 behind it, as in the original.
 			int pixelWidth = engine->window->GetPixelWidth();
 			int pixelHeight = engine->window->GetPixelHeight();
 			int gameWidth = std::min(pixelWidth, (int)std::round(pixelHeight * (4.0 / 3.0)));
 			viewport->SetViewportRect((pixelWidth - gameWidth) / 2, 0, gameWidth, pixelHeight);
+			bool menuActive = console->HasProperty("bUWindowActive") && console->GetBool("bUWindowActive");
+			HP1WideScene = !menuActive && pixelWidth > gameWidth;
+			HP1SceneX = 0;
+			HP1SceneWidth = pixelWidth;
 		}
 		else
 		{
@@ -2100,7 +2122,11 @@ void Engine::CloseWindow()
 
 void Engine::TickWindow()
 {
-	if (window && engine->LaunchInfo.ue1Version > 219)
+	if (window && WindowInactive)
+	{
+		window->UnlockCursor();
+	}
+	else if (window && engine->LaunchInfo.ue1Version > 219)
 	{
 		if (viewport->bShowWindowsMouse() && viewport->bWindowsMouseAvailable())
 			window->UnlockCursor();
@@ -2273,13 +2299,28 @@ void Engine::OnWindowClose()
 
 void Engine::OnWindowActivated()
 {
-	//SetPause(false);
+	// TickWindow locks the cursor again on the next frame if the game wants it.
+	if (WindowInactive)
+	{
+		WindowInactive = false;
+		if (LaunchInfo.ue1Version <= 219)
+			LockCursor();
+		if (audiodev)
+			audiodev->SetPaused(false);
+	}
 }
 
 void Engine::OnWindowDeactivated()
 {
+	// Switching to another app (Cmd+Tab) pauses the game, its sound and gives the mouse back.
 	ReleaseAllInput();
-	//SetPause(true);
+	if (!WindowInactive)
+	{
+		WindowInactive = true;
+		UnlockCursor();
+		if (audiodev)
+			audiodev->SetPaused(true);
+	}
 }
 
 void Engine::OnWindowDpiScaleChanged()
@@ -2341,8 +2382,21 @@ bool Engine::HP1SkipIntro(EInputKey key)
 	if (key != IK_Space && key != IK_Enter && key != IK_Escape && key != IK_LeftMouse)
 		return false;
 	UObject* book = console ? console->GetUObject("menuBook") : nullptr;
-	if (!book || !book->GetBool("bWindowVisible"))
-		return false;
+	bool menuActive = console && console->HasProperty("bUWindowActive") && console->GetBool("bUWindowActive");
+	if (!book || !book->GetBool("bWindowVisible") || !menuActive)
+	{
+		// In the game: Space, Enter or Escape fast-forwards a scripted cutscene to its end. The original only had
+		// this in debug mode (hold Space for 8x speed, HPConsole.StartFastForward). Clicks don't skip, and
+		// spell lessons or scrolls (cutscene mode without a cutscene script) are left alone.
+		if (key != IK_LeftMouse && !HP1SkippingCutscene && HP1CurrentCutscene())
+		{
+			HP1SkippingCutscene = true;
+			audiodev->MuteSounds = true;
+			LogMessage("Skipping cutscene " + HP1CurrentCutscene()->Name.ToString());
+			return true;
+		}
+		return HP1SkippingCutscene && key != IK_LeftMouse; // swallow repeated presses while skipping
+	}
 
 	if (book->GetBool("bShowSplash"))
 	{
@@ -2366,8 +2420,28 @@ bool Engine::HP1SkipIntro(EInputKey key)
 	return false;
 }
 
+UObject* Engine::HP1CurrentCutscene()
+{
+	UActor* player = viewport ? viewport->Actor() : nullptr;
+	UObject* hud = player && player->HasProperty("myHUD") ? player->GetUObject("myHUD") : nullptr;
+	if (!hud || !hud->HasProperty("curCutScene") || !hud->GetBool("bCutSceneMode"))
+		return nullptr;
+	return hud->GetUObject("curCutScene");
+}
+
+void Engine::HP1StopCutsceneSkip()
+{
+	if (HP1SkippingCutscene)
+		LogMessage("Cutscene skip finished");
+	HP1SkippingCutscene = false;
+	audiodev->MuteSounds = false;
+}
+
 void Engine::HP1UpdateSkip()
 {
+	if (HP1SkippingCutscene && !HP1CurrentCutscene())
+		HP1StopCutsceneSkip();
+
 	// The script never clears fast page skipping; do it once the storybook closes so the next one plays normally.
 	if (HP1SkippedStoryPage && !HP1SkippedStoryPage->GetBool("bWindowVisible"))
 	{

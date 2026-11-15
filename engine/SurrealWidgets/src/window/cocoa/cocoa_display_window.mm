@@ -193,6 +193,20 @@ public:
     CGImageRef cgImage = nullptr;
     std::map<InputKey, bool> keyState;
     bool cursorLocked = false;
+    bool active = false;
+
+    // Called from several places (key window changes, app activation, input), so the host
+    // hears about each change once and never stays "inactive" after the player came back.
+    void SetActive(bool value)
+    {
+        if (active == value || !windowHost)
+            return;
+        active = value;
+        if (active)
+            windowHost->OnWindowActivated();
+        else
+            windowHost->OnWindowDeactivated();
+    }
     bool resizable = true;
     NSSize minContentSize = NSMakeSize(0.0, 0.0);
     NSSize maxContentSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
@@ -462,6 +476,7 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
 {
     if (impl && impl->windowHost)
     {
+        impl->SetActive(true);
         NSPoint p = [theEvent locationInWindow];
         double flippedY = [self frame].size.height - p.y;
 
@@ -546,6 +561,7 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
 {
     if (impl && impl->windowHost)
     {
+        impl->SetActive(true);
         InputKey key = keycode_to_inputkey([theEvent keyCode]);
         impl->keyState[key] = true;
         impl->windowHost->OnWindowKeyDown(key);
@@ -655,8 +671,16 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
     if (self)
     {
         impl = d;
+        NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+        [center addObserver:self selector:@selector(appDidBecomeActive:) name:NSApplicationDidBecomeActiveNotification object:nil];
+        [center addObserver:self selector:@selector(appDidResignActive:) name:NSApplicationDidResignActiveNotification object:nil];
     }
     return self;
+}
+
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)windowDidResize:(NSNotification *)notification
@@ -680,6 +704,41 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
     {
         impl->windowHost->OnWindowGeometryChanged();
     }
+}
+
+- (BOOL)windowShouldClose:(NSWindow *)sender
+{
+    // Let the host decide (the game saves its settings and quits, the installer stops copying).
+    if (impl && impl->windowHost)
+    {
+        impl->windowHost->OnWindowClose();
+        return NO;
+    }
+    return YES;
+}
+
+- (void)windowDidBecomeKey:(NSNotification *)notification
+{
+    if (impl)
+        impl->SetActive(true);
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification
+{
+    if (impl)
+        impl->SetActive(false);
+}
+
+- (void)appDidBecomeActive:(NSNotification *)notification
+{
+    if (impl && impl->window && [impl->window isKeyWindow])
+        impl->SetActive(true);
+}
+
+- (void)appDidResignActive:(NSNotification *)notification
+{
+    if (impl)
+        impl->SetActive(false);
 }
 @end
 
