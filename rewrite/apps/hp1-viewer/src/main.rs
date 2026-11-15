@@ -5,22 +5,25 @@
 //! Mouse looks around, WASD moves, Q/E go down/up, Shift is faster, C prints the camera (for
 //! `--camera`), Escape quits. With `--shot` it renders one image without opening a window.
 
-use std::collections::HashMap;
+mod actors;
+mod textures;
+
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use glam::{Mat4, Vec3};
+use hp1_data::ClassTable;
 use hp1_data::level::LevelFile;
 use hp1_data::mesh::load_binary;
-use hp1_data::{ClassTable, DataValue, TextureInfo};
 use hp1_engine::level_mesh::{Style, TextureSize, build_level_mesh};
 use hp1_engine::lighting::build_level_light_maps;
 use hp1_engine::props::ActorProps;
 use hp1_engine::units::{ROT_TO_RAD, rotator_matrix};
 use hp1_platform::sdl3::event::{Event, WindowEvent};
 use hp1_platform::sdl3::keyboard::{Keycode, Scancode};
-use hp1_render::{Blend, DrawBatch, Gpu, Image, Scene, SceneDesc, Vertex, WorldRenderer, wgpu};
+use hp1_render::{Blend, DrawBatch, Geometry, Gpu, Image, Scene, SceneDesc, Vertex, WorldRenderer, wgpu};
+use textures::Textures;
 
 struct Args {
     data: PathBuf,
@@ -87,26 +90,15 @@ impl Camera {
 }
 
 struct Loaded {
-    scene_desc_vertices: Vec<Vertex>,
+    vertices: Vec<Vertex>,
     indices: Vec<u32>,
     batches: Vec<DrawBatch>,
     textures: Vec<Image>,
     lightmaps: Vec<Image>,
+    actors: actors::Actors,
     start: Camera,
     /// Where the sky is seen from (the sky zone's position), if the map has one.
     sky_origin: Option<Vec3>,
-}
-
-fn load_png(path: &Path) -> Result<Image> {
-    let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path)?));
-    let mut reader = dec.read_info()?;
-    let mut buf = vec![0; reader.output_buffer_size().context("png size")?];
-    let info = reader.next_frame(&mut buf)?;
-    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-        bail!("{} is not 8-bit RGBA", path.display());
-    }
-    buf.truncate(info.buffer_size());
-    Ok(Image { width: info.width, height: info.height, rgba: buf })
 }
 
 fn save_png(path: &Path, img: &Image) -> Result<()> {
@@ -123,45 +115,23 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
     let level: LevelFile = load_binary(&data.join("levels").join(format!("{map}.level")))
         .with_context(|| format!("loading map {map} (run `hp1-tools convert` first)"))?;
     let classes: ClassTable = serde_json::from_slice(&std::fs::read(data.join("classes.json"))?)?;
-    let mut textures_by_path: HashMap<String, TextureInfo> = HashMap::new();
-    for e in std::fs::read_dir(data.join("textures"))? {
-        let p = e?.path();
-        if p.extension().is_some_and(|x| x == "json") {
-            let list: Vec<TextureInfo> = serde_json::from_slice(&std::fs::read(&p)?)?;
-            textures_by_path.extend(list.into_iter().map(|t| (t.path.to_ascii_lowercase(), t)));
-        }
-    }
+    let mut textures = Textures::open(data)?;
 
     let light_maps = build_level_light_maps(&level, &classes);
     let mesh = build_level_mesh(&level, &light_maps, |path| {
-        let t = textures_by_path.get(&path.to_ascii_lowercase())?;
-        let draw_scale = t.props.get("DrawScale").and_then(DataValue::as_f32).unwrap_or(1.0);
-        Some(TextureSize { width: t.width, height: t.height, draw_scale, masked: t.masked })
+        let t = textures.info(path)?;
+        Some(TextureSize {
+            width: t.width,
+            height: t.height,
+            draw_scale: textures.draw_scale(path),
+            masked: t.masked,
+        })
     });
 
-    // Textures in the order the batches use them; index 0 is a grey stand-in for missing ones.
-    let mut textures = vec![Image { width: 1, height: 1, rgba: vec![128, 128, 128, 255] }];
-    let mut texture_index: HashMap<String, u32> = HashMap::new();
     let mut indices = Vec::new();
     let mut batches = Vec::new();
-    let mut missing = 0;
     for b in &mesh.batches {
-        let tex = match &b.texture {
-            Some(path) => *texture_index.entry(path.to_ascii_lowercase()).or_insert_with(|| {
-                match textures_by_path.get(&path.to_ascii_lowercase()).map(|t| load_png(&data.join(&t.file)))
-                {
-                    Some(Ok(img)) => {
-                        textures.push(img);
-                        textures.len() as u32 - 1
-                    }
-                    _ => {
-                        missing += 1;
-                        0
-                    }
-                }
-            }),
-            None => 0,
-        };
+        let tex = b.texture.as_deref().map_or(0, |t| textures.get(t));
         let blend = match b.style {
             Style::Opaque => Blend::Opaque,
             Style::Sky => Blend::Sky,
@@ -178,7 +148,11 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         });
         indices.extend_from_slice(&b.indices);
     }
-    let vertices = mesh.vertices.iter().map(|v| Vertex { pos: v.pos, uv: v.uv, lm_uv: v.lm_uv }).collect();
+    let vertices: Vec<Vertex> = mesh
+        .vertices
+        .iter()
+        .map(|v| Vertex { pos: v.pos, uv: v.uv, lm_uv: v.lm_uv, color: [1.0; 3] })
+        .collect();
     let lightmaps: Vec<Image> =
         mesh.light_pages.into_iter().map(|p| Image { width: p.size, height: p.size, rgba: p.rgba }).collect();
 
@@ -206,28 +180,47 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         .find(|a| classes.is_a(&a.class, "Engine.SkyZoneInfo"))
         .map(|a| Vec3::from(ActorProps::new(a, &classes).vec3("Location")));
 
+    let actors = actors::Actors::load(data, &level, &classes, &mut textures)?;
+    let rebuild = Instant::now();
+    actors.build_moving(1.0);
+    println!("{} moving objects, rebuilt per frame in {:.2?}", actors.moving_count(), rebuild.elapsed());
+
     println!(
-        "{map}: {} triangles in {} batches, {} textures ({missing} missing), {} light map pages, loaded in {:.2?}",
+        "{map}: {} triangles in {} batches, {} objects ({} without a mesh file), {} textures ({} missing), {} light map pages, loaded in {:.2?}",
         indices.len() / 3,
         batches.len(),
-        textures.len() - 1,
+        actors.count,
+        actors.skipped,
+        textures.images.len() - 1,
+        textures.missing,
         lightmaps.len(),
         t.elapsed()
     );
-    Ok(Loaded { scene_desc_vertices: vertices, indices, batches, textures, lightmaps, start, sky_origin })
+    Ok(Loaded { vertices, indices, batches, textures: textures.images, lightmaps, actors, start, sky_origin })
 }
 
+/// Uploads the level; geometry slot 1 holds the still objects, slot 2 the moving ones.
 fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
-    renderer.upload(
+    let mut scene = renderer.upload(
         gpu,
         &SceneDesc {
-            vertices: &l.scene_desc_vertices,
+            vertices: &l.vertices,
             indices: &l.indices,
             batches: l.batches.clone(),
             textures: &l.textures,
             lightmaps: &l.lightmaps,
         },
-    )
+    );
+    let still = l.actors.build_still();
+    scene.geometry.push(Geometry::new(gpu, &still.vertices, &still.indices, still.batches));
+    let moving = l.actors.build_moving(0.0);
+    scene.geometry.push(Geometry::new(gpu, &moving.vertices, &moving.indices, moving.batches));
+    scene
+}
+
+fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &Loaded, time: f32) {
+    let moving = l.actors.build_moving(time);
+    scene.geometry[2].update(gpu, &moving.vertices, &moving.indices, moving.batches);
 }
 
 fn main() -> Result<()> {
@@ -263,8 +256,12 @@ fn main() -> Result<()> {
             .map_err(|e| anyhow!(e))?;
     let instance = hp1_render::create_instance();
     // SAFETY: the window outlives the surface; both live until the end of `main`.
-    let surface =
-        unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&platform.window)?) }?;
+    let surface = unsafe {
+        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_display_and_window(
+            &platform.window,
+            &platform.window,
+        )?)
+    }?;
     let gpu = Gpu::new(instance, Some(&surface)).map_err(|e| anyhow!(e))?;
     let (mut width, mut height) = platform.pixel_size();
     let caps = surface.get_capabilities(&gpu.adapter);
@@ -280,11 +277,12 @@ fn main() -> Result<()> {
     config.present_mode = wgpu::PresentMode::AutoVsync;
     surface.configure(&gpu.device, &config);
     let renderer = WorldRenderer::new(&gpu, format);
-    let scene = upload(&gpu, &renderer, &loaded);
+    let mut scene = upload(&gpu, &renderer, &loaded);
     let mut depth = hp1_render::create_depth(&gpu, width, height);
 
     platform.set_mouse_captured(true);
     let mut last = Instant::now();
+    let started = Instant::now();
     'running: loop {
         for event in platform.events.poll_iter() {
             match event {
@@ -337,8 +335,13 @@ fn main() -> Result<()> {
                 surface.configure(&gpu.device, &config);
                 continue;
             }
-            _ => continue,
+            // Hidden or not ready: wait instead of spinning.
+            _ => {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                continue;
+            }
         };
+        update_moving(&gpu, &mut scene, &loaded, started.elapsed().as_secs_f32());
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         let sky = loaded.sky_origin.map(|o| camera.from(o).view_proj(width, height));

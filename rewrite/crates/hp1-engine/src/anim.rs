@@ -126,3 +126,21 @@ pub fn mesh_to_object(t: &hp1_data::mesh::MeshTransform) -> Mat4 {
         * Mat4::from_scale(Vec3::from(t.scale))
         * Mat4::from_translation(-Vec3::from(t.origin))
 }
+
+/// Vertex animation: the points of `frame_a` blended towards `frame_b` by `alpha`.
+pub fn vertex_frame(
+    positions: &[[f32; 3]],
+    frame_points: u32,
+    frame_a: u32,
+    frame_b: u32,
+    alpha: f32,
+) -> Vec<Vec3> {
+    let n = frame_points as usize;
+    let frames = positions.len() / n.max(1);
+    if n == 0 || frames == 0 {
+        return Vec::new();
+    }
+    let a = &positions[(frame_a as usize % frames) * n..][..n];
+    let b = &positions[(frame_b as usize % frames) * n..][..n];
+    a.iter().zip(b).map(|(a, b)| Vec3::from(*a).lerp(Vec3::from(*b), alpha)).collect()
+}

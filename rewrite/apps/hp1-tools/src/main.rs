@@ -7,6 +7,7 @@
 //!   hp1-tools convert <game folder> <out>  write the game in the rewrite's own formats
 //!   hp1-tools render-mesh <converted> <mesh> <out.png> [sequence] [0..1]   software preview
 //!   hp1-tools light-maps <converted> <map> <out.png>   a level's light maps side by side
+//!   hp1-tools actors <converted> <map> [filter]          placed objects with class and position
 
 mod preview;
 
@@ -24,7 +25,8 @@ const USAGE: &str = "usage:
   hp1-tools check-data <game folder>
   hp1-tools convert <game folder> <output folder>
   hp1-tools render-mesh <converted folder> <mesh> <out.png> [sequence] [time 0..1]
-  hp1-tools light-maps <converted folder> <map> <out.png>";
+  hp1-tools light-maps <converted folder> <map> <out.png>
+  hp1-tools actors <converted folder> <map> [name or class filter]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -44,6 +46,9 @@ fn main() -> ExitCode {
         .map(|_| ExitCode::SUCCESS),
         Some("light-maps") if args.len() == 4 => {
             preview::light_maps(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
+        }
+        Some("actors") if (3..=4).contains(&args.len()) => {
+            cmd_actors(Path::new(&args[1]), &args[2], args.get(3).map(String::as_str))
         }
         _ => {
             eprintln!("{USAGE}");
@@ -240,4 +245,23 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
         println!("    {}", from_end_names.join(", "));
     }
     Ok(if failed_packages == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+fn cmd_actors(data: &Path, map: &str, filter: Option<&str>) -> Result<ExitCode> {
+    let level: hp1_data::level::LevelFile =
+        hp1_data::mesh::load_binary(&data.join("levels").join(format!("{map}.level")))?;
+    let filter = filter.map(str::to_ascii_lowercase);
+    for (i, a) in level.actors.iter().enumerate() {
+        let Some(a) = a else { continue };
+        if let Some(f) = &filter
+            && !a.name.to_ascii_lowercase().contains(f.as_str())
+            && !a.class.to_ascii_lowercase().contains(f.as_str())
+        {
+            continue;
+        }
+        let loc = a.props.get("Location").and_then(hp1_data::DataValue::as_vec3).unwrap_or([0.0; 3]);
+        let seq = a.props.get("AnimSequence").and_then(hp1_data::DataValue::as_str).unwrap_or("");
+        println!("{i:5} {:28} {:32} {:8.0} {:8.0} {:8.0} {seq}", a.name, a.class, loc[0], loc[1], loc[2]);
+    }
+    Ok(ExitCode::SUCCESS)
 }

@@ -195,6 +195,38 @@ fn shadow_mask(model: &Model, lm: &LightMap, index: usize) -> Option<Vec<f32>> {
     Some(out)
 }
 
+/// The ambient colour of zone number `zone` (from `bsp::zone_at`).
+pub fn zone_ambient(level: &LevelFile, classes: &ClassTable, zone: usize) -> Vec3 {
+    let actor = level.model.zones.get(zone).map_or(-1, |z| z.actor);
+    ambient(level, classes, actor)
+}
+
+/// All lights of the level that give light.
+pub fn level_lights(level: &LevelFile, classes: &ClassTable) -> Vec<LightSource> {
+    level
+        .actors
+        .iter()
+        .flatten()
+        .filter_map(|a| LightSource::from_actor(&ActorProps::new(a, classes)))
+        .collect()
+}
+
+/// Light at a point of a moving or placed object (no shadows): ambient plus each light's colour
+/// times distance falloff times how much the surface faces the light.
+pub fn vertex_light(lights: &[LightSource], ambient: Vec3, p: Vec3, n: Vec3) -> Vec3 {
+    let mut c = ambient;
+    for light in lights {
+        let l = light.location - p;
+        let d2 = l.length_squared() / (light.radius * light.radius);
+        if d2 >= 1.0 {
+            continue;
+        }
+        let facing = if n == Vec3::ZERO { 1.0 } else { (l.normalize_or_zero().dot(n)).max(0.0) };
+        c += (light.color * falloff(d2) * facing).min(Vec3::ONE);
+    }
+    c.min(Vec3::ONE)
+}
+
 /// The zone ambient colour for a zone actor index (`-1` = the level's own settings).
 fn ambient(level: &LevelFile, classes: &ClassTable, zone_actor: i32) -> Vec3 {
     let actor = usize::try_from(zone_actor)

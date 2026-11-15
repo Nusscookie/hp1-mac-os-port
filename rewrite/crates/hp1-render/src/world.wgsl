@@ -16,21 +16,28 @@ struct VOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) lm_uv: vec2<f32>,
+    @location(2) color: vec3<f32>,
 };
 
 @vertex
-fn vs(@location(0) pos: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) lm_uv: vec2<f32>) -> VOut {
+fn vs(
+    @location(0) pos: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) lm_uv: vec2<f32>,
+    @location(3) color: vec3<f32>,
+) -> VOut {
     var o: VOut;
     o.pos = g.view_proj * vec4<f32>(pos, 1.0);
     o.uv = uv;
     o.lm_uv = lm_uv;
+    o.color = color;
     return o;
 }
 
 fn shade(i: VOut) -> vec4<f32> {
     let c = textureSample(tex, tex_sampler, i.uv);
     let light = textureSample(lightmap, lightmap_sampler, max(i.lm_uv, vec2<f32>(0.0))).rgb * 2.0;
-    let lit = select(light, vec3<f32>(1.0), i.lm_uv.x < 0.0);
+    let lit = select(light, i.color, i.lm_uv.x < 0.0);
     return vec4<f32>(min(c.rgb * lit * g.params.x, vec3<f32>(1.0)), c.a);
 }
 

@@ -6,7 +6,6 @@ use std::num::NonZeroU64;
 use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 pub use wgpu;
-use wgpu::util::DeviceExt;
 
 /// An RGBA8 image.
 #[derive(Clone, Debug)]
@@ -21,8 +20,10 @@ pub struct Image {
 pub struct Vertex {
     pub pos: [f32; 3],
     pub uv: [f32; 2],
-    /// Light-map coordinates; negative = full bright.
+    /// Light-map coordinates; negative = use `color` instead of a light map.
     pub lm_uv: [f32; 2],
+    /// Light colour when there is no light map (1 = full bright).
+    pub color: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,13 +113,71 @@ pub struct WorldRenderer {
     pub brightness: f32,
 }
 
-/// Uploaded geometry and images.
-pub struct Scene {
+/// Vertices, indices and draw batches on the GPU. Can be rewritten every frame.
+pub struct Geometry {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     batches: Vec<DrawBatch>,
+}
+
+/// Uploaded images plus any number of geometry sets (the level, the moving objects, …).
+pub struct Scene {
+    pub geometry: Vec<Geometry>,
     textures: Vec<wgpu::BindGroup>,
     lightmaps: Vec<wgpu::BindGroup>,
+}
+
+impl Geometry {
+    pub fn new(gpu: &Gpu, vertices: &[Vertex], indices: &[u32], batches: Vec<DrawBatch>) -> Self {
+        let make = |label, bytes: &[u8], usage| {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (bytes.len() as u64).max(64).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT),
+                usage: usage | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let vb = make("vertices", bytemuck::cast_slice(vertices), wgpu::BufferUsages::VERTEX);
+        let ib = make("indices", bytemuck::cast_slice(indices), wgpu::BufferUsages::INDEX);
+        let mut g = Self { vertices: vb, indices: ib, batches: Vec::new() };
+        g.update(gpu, vertices, indices, batches);
+        g
+    }
+
+    /// Replaces the contents, growing the buffers when needed.
+    pub fn update(&mut self, gpu: &Gpu, vertices: &[Vertex], indices: &[u32], batches: Vec<DrawBatch>) {
+        let vbytes: &[u8] = bytemuck::cast_slice(vertices);
+        let ibytes: &[u8] = bytemuck::cast_slice(indices);
+        if vbytes.len() as u64 > self.vertices.size() || ibytes.len() as u64 > self.indices.size() {
+            *self = Self::new(gpu, &[], &[], Vec::new());
+            let grow =
+                |len: usize| (len as u64 * 3 / 2).next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT).max(64);
+            self.vertices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("vertices"),
+                size: grow(vbytes.len()),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.indices = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("indices"),
+                size: grow(ibytes.len()),
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        let pad = |b: &[u8]| {
+            let mut v = b.to_vec();
+            v.resize(b.len().next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT as usize), 0);
+            v
+        };
+        if !vbytes.is_empty() {
+            gpu.queue.write_buffer(&self.vertices, 0, &pad(vbytes));
+        }
+        if !ibytes.is_empty() {
+            gpu.queue.write_buffer(&self.indices, 0, &pad(ibytes));
+        }
+        self.batches = batches;
+    }
 }
 
 fn mip_chain(img: &Image) -> Vec<Image> {
@@ -240,7 +299,8 @@ impl WorldRenderer {
             bind_group_layouts: &[Some(&globals_layout), Some(&texture_layout), Some(&texture_layout)],
             immediate_size: 0,
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x2];
+        let attributes =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x2, 3 => Float32x3];
         let buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -351,17 +411,8 @@ impl WorldRenderer {
                 self.image_group(gpu, &upload_image(gpu, img, false, "lightmap"), &self.lightmap_sampler)
             })
             .collect();
-        let vertices = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("vertices"),
-            contents: bytemuck::cast_slice(desc.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let indices = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("indices"),
-            contents: bytemuck::cast_slice(desc.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        Scene { vertices, indices, batches: desc.batches.clone(), textures, lightmaps }
+        let world = Geometry::new(gpu, desc.vertices, desc.indices, desc.batches.clone());
+        Scene { geometry: vec![world], textures, lightmaps }
     }
 
     /// Records drawing `scene` into `color`/`depth`, clearing both first. With `sky_view`, the
@@ -427,29 +478,37 @@ impl WorldRenderer {
             multiview_mask: None,
         });
         pass.set_bind_group(0, &self.globals_groups[slot], &[]);
-        pass.set_vertex_buffer(0, scene.vertices.slice(..));
-        pass.set_index_buffer(scene.indices.slice(..), wgpu::IndexFormat::Uint32);
-        // Sky masks first so nothing behind them overwrites the sky.
-        let order = scene
-            .batches
-            .iter()
-            .filter(|b| b.blend == Blend::Sky)
-            .chain(scene.batches.iter().filter(|b| b.blend != Blend::Sky));
-        for b in order {
-            pass.set_pipeline(match b.blend {
-                Blend::Opaque => &self.opaque,
-                Blend::Masked => &self.masked,
-                Blend::Translucent => &self.translucent,
-                Blend::Modulated => &self.modulated,
-                Blend::Sky if sky_as_mask => &self.sky_mask,
-                Blend::Sky if slot == 1 => continue,
-                Blend::Sky => &self.opaque,
-            });
-            let tex = scene.textures.get(b.texture as usize).unwrap_or(&scene.textures[0]);
-            let lm = scene.lightmaps.get(b.lightmap as usize).unwrap_or(&scene.lightmaps[0]);
-            pass.set_bind_group(1, tex, &[]);
-            pass.set_bind_group(2, lm, &[]);
-            pass.draw_indexed(b.first_index..b.first_index + b.index_count, 0, 0..1);
+        // Sky masks first so nothing behind them overwrites the sky, then solid surfaces, then
+        // the see-through ones (which don't write depth).
+        let phase = |b: Blend| match b {
+            Blend::Sky => 0,
+            Blend::Opaque | Blend::Masked => 1,
+            Blend::Translucent | Blend::Modulated => 2,
+        };
+        for current in 0..3 {
+            for geo in &scene.geometry {
+                if geo.batches.iter().all(|b| phase(b.blend) != current) {
+                    continue;
+                }
+                pass.set_vertex_buffer(0, geo.vertices.slice(..));
+                pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
+                for b in geo.batches.iter().filter(|b| phase(b.blend) == current) {
+                    pass.set_pipeline(match b.blend {
+                        Blend::Opaque => &self.opaque,
+                        Blend::Masked => &self.masked,
+                        Blend::Translucent => &self.translucent,
+                        Blend::Modulated => &self.modulated,
+                        Blend::Sky if sky_as_mask => &self.sky_mask,
+                        Blend::Sky if slot == 1 => continue,
+                        Blend::Sky => &self.opaque,
+                    });
+                    let tex = scene.textures.get(b.texture as usize).unwrap_or(&scene.textures[0]);
+                    let lm = scene.lightmaps.get(b.lightmap as usize).unwrap_or(&scene.lightmaps[0]);
+                    pass.set_bind_group(1, tex, &[]);
+                    pass.set_bind_group(2, lm, &[]);
+                    pass.draw_indexed(b.first_index..b.first_index + b.index_count, 0, 0..1);
+                }
+            }
         }
     }
 }
