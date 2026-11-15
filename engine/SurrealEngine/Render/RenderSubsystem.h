@@ -11,6 +11,7 @@ class UViewportWindow;
 class RenderSubsystem
 {
 public:
+	int GetUIScale() const { return Canvas.uiscale; }
 	RenderSubsystem(RenderDevice* renderdevice);
 
 	void PreRenderWindows(UCanvas* canvas);
@@ -93,6 +94,7 @@ private:
 	void PreRender();
 	void RenderOverlays();
 	void PostRender();
+	void DrawHP1MenuCursor();
 	void PostRenderFlash();
 	void DrawTimedemoStats();
 	void DrawCollisionDebug();

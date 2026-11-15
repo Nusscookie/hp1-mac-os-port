@@ -17,8 +17,7 @@ void UActor::UpdateBspInfo()
 	{
 		UMesh* mesh = Mesh();
 		Coords rotation = Coords::Rotation(Rotation());
-		mat4 objectToWorld = mat4::translate(Location() + PrePivot()) * Coords::Rotation(Rotation()).ToMatrix() * mat4::scale(DrawScale());
-		mat4 meshToWorld = objectToWorld * mesh->meshToObject;
+		mat4 meshToWorld = GetMeshToWorldMatrix();
 		bbox = mesh->BoundingBox.transform(meshToWorld);
 	}
 	else if ((dt == DT_Sprite || dt == DT_SpriteAnimOnce) && (Texture()))

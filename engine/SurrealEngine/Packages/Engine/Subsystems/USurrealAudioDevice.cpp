@@ -440,7 +440,7 @@ bool USurrealAudioDevice::PlaySound(UActor* Actor, int Id, USound* Sound, vec3 L
 		// Attempt to normalize volume around 1.0 as the values used by the original games are just really broken in general.
 		if (Volume >= 8.0f)
 			Volume = 0.8f; // Special check for announcer garbage
-		else
+		else if (!engine->LaunchInfo.IsHarryPotter1() || Volume > 1.0f) // HP1's own volumes below 1 are deliberate (quieter footsteps)
 			Volume = (Volume - 1.0f) * 0.25f + 1.0f;
 	}
 

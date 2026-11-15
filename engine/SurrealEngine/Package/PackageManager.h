@@ -103,6 +103,7 @@ private:
 	std::unique_ptr<IniFile>& LoadUserIniFile();
 	std::unique_ptr<IniFile>& LoadSystemIniFile();
 	void LoadEngineIniFiles();
+	void AddHP1MacKeyBindings(IniFile& user);
 	void LoadFileExtensions();
 	void LoadIntFiles();
 	void LoadLocalizationFilesFromFolder(const fs::path& baseDir, const std::string& localeExt);

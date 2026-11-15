@@ -335,6 +335,11 @@ void Engine::DumpSkeletalMesh()
 				<< " BoneWeights=" << mesh->BoneWeights.size() << " LocalPoints=" << mesh->LocalPoints.size() << " SkeletalDepth=" << mesh->SkeletalDepth << " DefaultAnimation=" << (mesh->DefaultAnimation ? mesh->DefaultAnimation->Name.ToString() : "null")
 				<< " Scale=" << mesh->Scale.x << "," << mesh->Scale.y << "," << mesh->Scale.z << " Origin=" << mesh->Origin.x << "," << mesh->Origin.y << "," << mesh->Origin.z
 				<< " RotOrigin=" << mesh->RotOrigin.Pitch << "," << mesh->RotOrigin.Yaw << "," << mesh->RotOrigin.Roll << std::endl;
+			{
+				vec3 lo(1e9f), hi(-1e9f);
+				for (const vec3& p : mesh->Points) { lo = vec3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z)); hi = vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z)); }
+				std::cerr << " bounds min=" << lo.x << "," << lo.y << "," << lo.z << " max=" << hi.x << "," << hi.y << "," << hi.z << std::endl;
+			}
 			// Bind pose check: which quaternion convention reproduces Points from LocalPoints?
 			for (int variant = 0; variant < 4; variant++)
 			{
@@ -548,7 +553,9 @@ void Engine::Run()
 	audiodev->InitDevice();
 	render = std::make_unique<RenderSubsystem>(window->GetRenderDevice());
 
-	if (engine->LaunchInfo.ue1Version > 219 && !client->StartupFullscreen)
+	// HP1: on the Mac, full screen is just a window, so the menus can always use the system pointer. That frees the
+	// mouse while a menu is open, so it can reach the macOS menu bar at the top of a full screen window.
+	if (engine->LaunchInfo.ue1Version > 219 && (!client->StartupFullscreen || LaunchInfo.IsHarryPotter1()))
 		viewport->bWindowsMouseAvailable() = true;
 
 	window->LockCursor();
@@ -1995,7 +2002,12 @@ Array<std::string> Engine::GetSubcommands(const std::string& command)
 		if (endpos == std::string::npos)
 			endpos = command.size();
 
+		// Trim the spaces around each part: "MoveForward | Button bBroomPitchUp" (HP1's bindings) must look up the
+		// alias "MoveForward", not "MoveForward ".
 		std::string subcommand = command.substr(pos, endpos - pos);
+		size_t first = subcommand.find_first_not_of(" \t");
+		size_t last = subcommand.find_last_not_of(" \t");
+		subcommand = (first == std::string::npos) ? std::string() : subcommand.substr(first, last - first + 1);
 		if (!subcommand.empty())
 			subcommands.push_back(subcommand);
 		pos = endpos + 1;
@@ -2170,6 +2182,12 @@ void Engine::OnWindowMouseMove(const Point& pos)
 	{
 		viewport->WindowsMouseX() = (float)(pos.x * window->GetDpiScale()) - (float)viewport->ViewportX();
 		viewport->WindowsMouseY() = (float)(pos.y * window->GetDpiScale()) - (float)viewport->ViewportY();
+		if (LaunchInfo.IsHarryPotter1() && render)
+		{
+			// The menus work in canvas units (pixels / UI scale), see HPConsole.RenderUWindow
+			viewport->WindowsMouseX() /= (float)render->GetUIScale();
+			viewport->WindowsMouseY() /= (float)render->GetUIScale();
+		}
 	}
 }
 

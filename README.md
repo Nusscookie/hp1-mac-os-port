@@ -61,9 +61,13 @@ You can move `HP1.app` to your Applications folder or the Dock.
 
 - **Skipping:** press Space, Enter, Esc or click to skip the startup logos and the storybook pages, and Space, Enter
   or Esc to skip in-game cutscenes (the original only allowed this in its hidden debug mode).
-- **Widescreen:** the 3D view fills widescreen displays, while menus and the HUD keep the original 4:3 layout.
+- **Widescreen:** the 3D view and the HUD fill widescreen displays, while the menus keep the original 4:3 layout.
+- **Controls:** W/A/S/D work like the arrow keys (walk, turn, and steer the broom), Space jumps, Shift is the broom
+  boost. Your own key changes in the game's options are kept.
 - **Mac shortcuts:** Cmd+Q quits (and saves your settings), Cmd+F or Ctrl+Cmd+F switches between full screen and a
   window, Cmd+M minimizes. Switching to another app (Cmd+Tab) pauses the game and its sound and frees the mouse.
+  While the game's menu is open (Esc), the mouse is free, so in full screen you can move it to the top of the screen
+  to reach the macOS menu bar.
 
 ## Is this legal?
 

@@ -872,7 +872,34 @@ void PackageManager::LoadEngineIniFiles()
 
 		iniFiles["User"] = std::make_unique<IniFile>((gameSystemFolderPath / userIniName).string());
 		defaultUserFile = std::make_unique<IniFile>((gameSystemFolderPath / "DefUser.ini").string());
+
+		if (launchInfo.IsHarryPotter1())
+			AddHP1MacKeyBindings(*iniFiles["User"]);
 	}
+}
+
+// The original game walks with the arrow keys only. Once per installation, add W/A/S/D (doing what the arrow keys
+// do, on foot and on the broom) and Space to jump, but only on keys that still have their original binding, so
+// changes made later in the game's options are kept. A was the broom boost, which stays on the right mouse button
+// and moves to Shift.
+void PackageManager::AddHP1MacKeyBindings(IniFile& user)
+{
+	if (user.GetValue("SurrealEngine.HP1Port", "MacKeys") == "1")
+		return;
+
+	auto bind = [&](const char* key, const std::string& command, const char* original)
+	{
+		std::string current = user.GetValue("Engine.Input", key);
+		if (current.empty() || current == original)
+			user.SetValue("Engine.Input", key, command);
+	};
+	bind("W", user.GetValue("Engine.Input", "Up"), "");
+	bind("S", user.GetValue("Engine.Input", "Down"), "");
+	bind("A", user.GetValue("Engine.Input", "Left"), "Button bBroomBoost");
+	bind("D", user.GetValue("Engine.Input", "Right"), "");
+	bind("Space", "Jump", "");
+	bind("Shift", "Button bBroomBoost", "");
+	user.SetValue("SurrealEngine.HP1Port", "MacKeys", "1");
 }
 
 void PackageManager::LoadFileExtensions()

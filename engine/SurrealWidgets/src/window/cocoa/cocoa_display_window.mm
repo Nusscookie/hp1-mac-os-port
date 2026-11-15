@@ -193,7 +193,13 @@ public:
     CGImageRef cgImage = nullptr;
     std::map<InputKey, bool> keyState;
     bool cursorLocked = false;
+    // Set once the window has captured the mouse (a game window, not the launcher): from then on the system
+    // pointer stays invisible over the view while the mouse is free, because the game draws its own cursor.
+    // Outside the view (the menu bar of a full screen window) the normal arrow shows.
+    bool hideCursorInView = false;
     bool active = false;
+    // macOS reports fractional mouse deltas; keep the remainder so slow movements aren't lost to rounding.
+    double rawMouseRestX = 0.0, rawMouseRestY = 0.0;
 
     // Called from several places (key window changes, app activation, input), so the host
     // hears about each change once and never stays "inactive" after the player came back.
@@ -363,6 +369,21 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
     return YES;
 }
 
+- (void)resetCursorRects
+{
+    [super resetCursorRects];
+    if (impl && impl->hideCursorInView)
+    {
+        static NSCursor* hiddenCursor = nil;
+        if (!hiddenCursor)
+        {
+            NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(1, 1)];
+            hiddenCursor = [[NSCursor alloc] initWithImage:image hotSpot:NSMakePoint(0, 0)];
+        }
+        [self addCursorRect:[self bounds] cursor:hiddenCursor];
+    }
+}
+
 - (BOOL)acceptsFirstMouse:(NSEvent *)event
 {
     return YES;  // Allow mouse events even if window isn't key
@@ -457,7 +478,14 @@ void CocoaDisplayWindowImpl::stopDisplayLink()
     {
         if (impl->cursorLocked)
         {
-            impl->windowHost->OnWindowRawMouseMove((int)[theEvent deltaX], (int)[theEvent deltaY]);
+            impl->rawMouseRestX += [theEvent deltaX];
+            impl->rawMouseRestY += [theEvent deltaY];
+            int dx = (int)impl->rawMouseRestX;
+            int dy = (int)impl->rawMouseRestY;
+            impl->rawMouseRestX -= dx;
+            impl->rawMouseRestY -= dy;
+            if (dx != 0 || dy != 0)
+                impl->windowHost->OnWindowRawMouseMove(dx, dy);
         }
         else
         {
@@ -1157,6 +1185,11 @@ void CocoaDisplayWindow::LockCursor()
         impl->cursorLocked = true;
         CGAssociateMouseAndMouseCursorPosition(false);
         [NSCursor hide];
+        if (!impl->hideCursorInView)
+        {
+            impl->hideCursorInView = true;
+            [impl->window invalidateCursorRectsForView:[impl->window contentView]];
+        }
     }
 }
 

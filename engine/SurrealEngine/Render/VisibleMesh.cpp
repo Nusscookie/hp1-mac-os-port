@@ -24,8 +24,7 @@ bool VisibleMesh::DrawMesh(VisibleFrame* frame, UActor* actor, bool wireframe, b
 
 	// DrawDebugInfo(frame, actor);
 
-	mat4 objectToWorld = mat4::translate(actor->Location() + actor->PrePivot()) * Coords::Rotation(actor->Rotation()).ToMatrix() * mat4::scale(actor->DrawScale());
-	mat4 meshToWorld = objectToWorld * mesh->meshToObject;
+	mat4 meshToWorld = actor->GetMeshToWorldMatrix();
 
 	// Note: using transpose seems to be wrong here
 	mat3 meshNormalToWorld = mat3(Coords::Rotation(actor->Rotation()).ToMatrix() * Coords::Rotation(mesh->RotOrigin).ToMatrix());

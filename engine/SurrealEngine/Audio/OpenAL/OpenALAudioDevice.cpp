@@ -55,6 +55,8 @@ OpenALAudioDevice::OpenALAudioDevice(int inFrequency, int numVoices, int inMusic
 	alDistanceModel(AL_LINEAR_DISTANCE_CLAMPED);
 	alSpeedOfSound(343.3f / (1.0f / UU_PER_METER));
 
+	ALSoundSource::SquaredFalloff = engine->LaunchInfo.IsHarryPotter1();
+
 	// Init sound sources
 	alcGetIntegerv(alDevice, ALC_MONO_SOURCES, 1, &monoSources);
 	alcGetIntegerv(alDevice, ALC_STEREO_SOURCES, 1, &stereoSources);

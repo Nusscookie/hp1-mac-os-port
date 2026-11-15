@@ -6,13 +6,15 @@
 #include "Packages/Engine/Actors/UActor.h"
 #include "Packages/Engine/Resources/USound.h"
 
+bool ALSoundSource::SquaredFalloff = false;
+
 ALSoundSource::ALSoundSource()
 {
 	alGenSources(1, &id);
 	if (alGetError() != AL_NO_ERROR)
 		Exception::Throw("Failed to generate AL source");
 
-	alSourcef(id, AL_ROLLOFF_FACTOR, 1.1f);
+	alSourcef(id, AL_ROLLOFF_FACTOR, SquaredFalloff ? 1.0f : 1.1f);
 	// Positions are given relative to the listener, see UpdatePosition.
 	alSourcei(id, AL_SOURCE_RELATIVE, AL_TRUE);
 }
@@ -73,7 +75,7 @@ void ALSoundSource::UpdatePosition(const ALListenerFrame& listener)
 	// a sound fully to the side ends up at MaxPanAngle, which plays roughly 75/25 on both channels.
 	const float MaxPanAngle = 25.0f * 3.14159265f / 180.0f;
 	vec3 delta = worldPosition - listener.location;
-	float distance = length(delta);
+	distance = length(delta);
 	vec3 relative(0.0f);
 	if (distance > 0.001f)
 	{
@@ -82,6 +84,17 @@ void ALSoundSource::UpdatePosition(const ALListenerFrame& listener)
 		relative = vec3(std::sin(angle) * distance, 0.0f, -std::cos(angle) * distance); // OpenAL: +x right, -z ahead
 	}
 	alSourcefv(id, AL_POSITION, &relative[0]);
+	if (SquaredFalloff)
+		ApplyGain();
+}
+
+void ALSoundSource::ApplyGain()
+{
+	// OpenAL's linear model already gives (1 - distance / radius); multiply in the same factor once more.
+	float gain = volume;
+	if (SquaredFalloff && radius > 0.0f)
+		gain *= std::clamp(1.0f - distance / radius, 0.0f, 1.0f);
+	alSourcef(id, AL_GAIN, gain);
 }
 
 void ALSoundSource::SetRadius(float newRadius)
@@ -90,7 +103,9 @@ void ALSoundSource::SetRadius(float newRadius)
 	{
 		radius = newRadius;
 		alSourcef(id, AL_MAX_DISTANCE, radius);
-		alSourcef(id, AL_REFERENCE_DISTANCE, 0.1f * radius);
+		alSourcef(id, AL_REFERENCE_DISTANCE, SquaredFalloff ? 0.0f : 0.1f * radius);
+		if (SquaredFalloff)
+			ApplyGain();
 	}
 }
 
@@ -132,8 +147,8 @@ void ALSoundSource::SetVolume(float newVolume)
 	if (volume != newVolume)
 	{
 		volume = newVolume;
-		alSourcef(id, AL_GAIN, volume);
 		alSourcef(id, AL_MAX_GAIN, volume);
+		ApplyGain();
 	}
 }
 

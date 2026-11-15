@@ -62,7 +62,13 @@ void RenderSubsystem::ResetCanvas()
 		Canvas.WideFrame.Projection = mat4::frustum(-RProjZ, RProjZ, -wideAspect * RProjZ, wideAspect * RProjZ, 1.0f, 32768.0f, handedness::left, clipzrange::zero_positive_w);
 	}
 
-	int sizeX = (int)(engine->viewport->ViewportWidth() / (float)Canvas.uiscale);
+	// HP1 during play: the HUD spans the whole window too, so the health scar and other corner items sit in the
+	// corners and centered items stay centered. Menus keep the original 4:3 layout.
+	bool hp1WideHud = engine->LaunchInfo.IsHarryPotter1() && engine->HP1WideScene;
+	if (hp1WideHud)
+		Canvas.Frame = Canvas.WideFrame;
+
+	int sizeX = (int)((hp1WideHud ? engine->HP1SceneWidth : engine->viewport->ViewportWidth()) / (float)Canvas.uiscale);
 	int sizeY = (int)(engine->viewport->ViewportHeight() / (float)Canvas.uiscale);
 	engine->canvas->CurX() = 0.0f;
 	engine->canvas->CurY() = 0.0f;
@@ -76,7 +82,7 @@ void RenderSubsystem::ResetCanvas()
 	engine->canvas->SizeX() = sizeX;
 	engine->canvas->SizeY() = sizeY;
 
-	if (engine->LaunchInfo.IsHarryPotter1())
+	if (engine->LaunchInfo.IsHarryPotter1() && !hp1WideHud)
 	{
 		engine->canvas->ClipX() = (float)sizeY * (4.0f / 3.0f);
 		engine->canvas->SizeX() = (int)std::round(sizeY * (4.0f / 3.0f));
@@ -124,10 +130,29 @@ void RenderSubsystem::PostRender()
 	if (engine->viewport->Actor())
 		CallEvent(engine->viewport->Actor(), EventName::PostRender, { ExpressionValue::ObjectValue(engine->canvas) });
 	CallEvent(engine->console, EventName::PostRender, { ExpressionValue::ObjectValue(engine->canvas) });
+	if (engine->LaunchInfo.IsHarryPotter1())
+		DrawHP1MenuCursor();
 	DrawTimedemoStats();
 	
 	if (ShowCollisionDebug)
 		DrawCollisionDebug();
+}
+
+// HP1's menus follow the system pointer (see Engine::Init), but with a system pointer UWindow only picks a
+// Windows cursor shape and doesn't draw its own wand cursor. Draw it here the way it does without one.
+void RenderSubsystem::DrawHP1MenuCursor()
+{
+	UObject* console = engine->console;
+	if (!engine->viewport->bShowWindowsMouse() || !engine->viewport->bWindowsMouseAvailable() || !console->HasProperty("Root"))
+		return;
+	UObject* root = console->GetUObject("Root");
+	if (!root || !root->GetBool("bWindowVisible"))
+		return;
+
+	engine->canvas->SetByte("Style", 1);
+	engine->viewport->bWindowsMouseAvailable() = false;
+	CallEvent(root, NameString("DrawMouse"), { ExpressionValue::ObjectValue(engine->canvas) });
+	engine->viewport->bWindowsMouseAvailable() = true;
 }
 
 void RenderSubsystem::PostRenderFlash()

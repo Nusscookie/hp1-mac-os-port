@@ -37,13 +37,20 @@ public:
 	void SetPitch(float newPitch);
 	void DoLoop();
 
+	// Harry Potter 1: fade sounds out with the square of (1 - distance / radius) instead of linearly, so the footsteps
+	// of a crowd of students far away don't add up to a constant galloping noise.
+	static bool SquaredFalloff;
+
 private:
+	void ApplyGain();
+
 	ALuint id = -1;
 	UActor* actor = nullptr;
 	USound* sound = nullptr;
 	vec3 worldPosition = vec3(0.0f);
 	vec3 velocity = vec3(0.0f);
 	float radius = 0.0f;
+	float distance = 0.0f;
 	float volume = 0.0f;
 	float pitch = 0.0f;
 	float dopplerFactor = 0.0f;

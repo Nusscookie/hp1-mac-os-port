@@ -6,6 +6,7 @@
 #include "VM/Frame.h"
 #include "Packages/Engine/Resources/Mesh/USkeletalMesh.h"
 #include "Packages/Engine/Resources/Mesh/UAnimation.h"
+#include "Packages/Engine/Actors/Pawn/UPawn.h"
 #include "Engine.h"
 #include "Package/PackageManager.h"
 
@@ -410,8 +411,20 @@ void UActor::StopSkelChannels()
 
 mat4 UActor::GetMeshToWorldMatrix()
 {
+	UMesh* mesh = Mesh();
+
+	// HP1 characters are modelled with their feet at height 0, and the game puts the feet at the bottom of the
+	// collision cylinder (Harry's climbing code moves PrePivot by the changed CollisionHeight to keep them there).
+	// Only some meshes have a matching Origin; Dumbledore, McGonagall and the students have none and would float.
+	if (mesh && engine->LaunchInfo.IsHarryPotter1() && UObject::TryCast<UPawn>(this) && UObject::TryCast<USkeletalMesh>(mesh))
+	{
+		mat4 objectToWorld = mat4::translate(Location() + PrePivot() - vec3(0.0f, 0.0f, CollisionHeight())) * Coords::Rotation(Rotation()).ToMatrix() * mat4::scale(DrawScale());
+		mat4 meshToObject = Coords::Rotation(mesh->RotOrigin).ToMatrix() * mat4::scale(mesh->Scale) * mat4::translate(-vec3(mesh->Origin.x, mesh->Origin.y, 0.0f));
+		return objectToWorld * meshToObject;
+	}
+
 	mat4 objectToWorld = mat4::translate(Location() + PrePivot()) * Coords::Rotation(Rotation()).ToMatrix() * mat4::scale(DrawScale());
-	return Mesh() ? objectToWorld * Mesh()->meshToObject : objectToWorld;
+	return mesh ? objectToWorld * mesh->meshToObject : objectToWorld;
 }
 
 // Pose of this actor's current sequence on the given mesh, including the tween from the previous animation.
