@@ -44,6 +44,9 @@ folder inside the game folder, as in the original.
 
 You can move `HP1.app` to your Applications folder or the Dock.
 
+Press Space, Enter, Esc or click to skip the startup logos and the storybook pages (the original only allowed this
+in its hidden debug mode).
+
 ## Is this legal?
 
 This project is set up the way other engine re-implementations (OpenMW, ScummVM, OpenRCT2) do it:

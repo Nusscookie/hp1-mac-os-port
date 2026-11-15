@@ -667,6 +667,8 @@ void Engine::Run()
 
 		if (LaunchInfo.IsHarryPotter1())
 		{
+			HP1UpdateSkip();
+
 			// The game's menus, HUD and cutscene bars are laid out for a 4:3 screen. Show it centered with black borders.
 			int pixelWidth = engine->window->GetPixelWidth();
 			int pixelHeight = engine->window->GetPixelHeight();
@@ -2077,7 +2079,7 @@ void Engine::OpenWindow()
 	{
 		window->SetWindowTitle("Harry Potter and the Philosopher's Stone");
 		// The repository ships no game art: the window and Dock icon come from the installed game data.
-		if (auto icon = LoadIcoImage((fs::path(LaunchInfo.gameRootFolder) / "System" / "hp.ico").string(), 256))
+		if (auto icon = LoadIcoAsMacAppIcon((fs::path(LaunchInfo.gameRootFolder) / "System" / "hp.ico").string()))
 			window->SetWindowIcon({ icon });
 	}
 	else
@@ -2330,9 +2332,56 @@ void Engine::ReleaseAllInput()
 	}
 }
 
+// The original game only lets you skip the startup logos and the storybook pages in its hidden debug mode
+// (which also turns on cheats). Here Space, Enter, Escape or a click skips them, using the game's own
+// mechanisms: the debug-mode splash dismissal and the storybook's fast page skipping, so the story
+// logic on each page (cards, level changes) still runs.
+bool Engine::HP1SkipIntro(EInputKey key)
+{
+	if (key != IK_Space && key != IK_Enter && key != IK_Escape && key != IK_LeftMouse)
+		return false;
+	UObject* book = console ? console->GetUObject("menuBook") : nullptr;
+	if (!book || !book->GetBool("bWindowVisible"))
+		return false;
+
+	if (book->GetBool("bShowSplash"))
+	{
+		book->SetFloat("fShowSplashTime", -1.0f);
+		return true;
+	}
+
+	UObject* page = book->GetUObject("curPage");
+	if (page && page->IsA("FEStoryBookPage") && page->GetBool("bWindowVisible"))
+	{
+		if (!page->GetBool("_bDoFastPageSkipping"))
+		{
+			page->SetBool("_bDoFastPageSkipping", true);
+			page->SetFloat("_PageTimer", 0.25f);
+			if (viewport->Actor())
+				audiodev->StopActorSound(viewport->Actor(), nullptr, 3 /*SLOT_Interact: the narration*/);
+			HP1SkippedStoryPage = page;
+		}
+		return true;
+	}
+	return false;
+}
+
+void Engine::HP1UpdateSkip()
+{
+	// The script never clears fast page skipping; do it once the storybook closes so the next one plays normally.
+	if (HP1SkippedStoryPage && !HP1SkippedStoryPage->GetBool("bWindowVisible"))
+	{
+		HP1SkippedStoryPage->SetBool("_bDoFastPageSkipping", false);
+		HP1SkippedStoryPage = nullptr;
+	}
+}
+
 void Engine::InputEvent(EInputKey key, EInputType type, int delta)
 {
 	if (Frame::RunState != FrameRunState::Running || playingAvi)
+		return;
+
+	if (LaunchInfo.IsHarryPotter1() && type == EInputType::IST_Press && HP1SkipIntro(key))
 		return;
 
 	bool handled = CallEvent(console, EventName::KeyEvent, { ExpressionValue::ByteValue(key), ExpressionValue::ByteValue(type), ExpressionValue::FloatValue((float)delta) }).ToBool();

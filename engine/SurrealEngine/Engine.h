@@ -121,6 +121,9 @@ public:
 
 	void Key(std::string key);
 	void InputEvent(EInputKey key, EInputType type, int delta = 0);
+	bool HP1SkipIntro(EInputKey key);
+	void HP1UpdateSkip();
+	UObject* HP1SkippedStoryPage = nullptr;
 	void ReleaseAllInput();
 
 	void OnWindowPaint() override;
