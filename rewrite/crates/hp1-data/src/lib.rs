@@ -8,6 +8,8 @@
 //! manifest.json                 FORMAT_VERSION, source language, what was converted
 //! textures/<Package>.json       TextureInfo list for one package
 //! textures/<Package>/<Group.Name>.png
+//! sounds/<Package>.json         AudioInfo list; files sounds/<Package>/<Group.Name>.wav
+//! music/<Package>.json          AudioInfo list; files music/<Package>/<Name>.mp2
 //! ```
 
 use std::collections::BTreeMap;
@@ -91,6 +93,18 @@ pub struct TextureInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sparks: Vec<Spark>,
     /// Every property the CD stores for this texture (flags, animation chain, detail texture, …).
+    pub props: PropMap,
+}
+
+/// A sound effect, line of dialogue or piece of music. The file is the original audio stream from
+/// the CD, unchanged (WAV for sounds, MPEG Layer II for music), so loop points and quality are kept.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioInfo {
+    pub path: String,
+    pub file: String,
+    /// `wav`, `mp2`, …
+    pub format: String,
+    pub bytes: usize,
     pub props: PropMap,
 }
 

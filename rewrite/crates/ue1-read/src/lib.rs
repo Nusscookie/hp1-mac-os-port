@@ -10,6 +10,7 @@ mod object;
 mod package;
 mod props;
 mod reader;
+pub mod sound;
 pub mod texture;
 
 pub use library::{Library, ObjectHandle, PACKAGE_DIRS, PACKAGE_EXTENSIONS, package_files};

@@ -2,6 +2,7 @@
 //! formats (see `hp1-data`). This is the only part of the rewrite that knows Unreal's formats.
 //! Script code inside the packages is never read.
 
+mod audio;
 mod textures;
 
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 use hp1_data::{DataValue, FORMAT_VERSION, Manifest, PropMap};
 use ue1_read::{Library, Package, Props, Value};
 
+pub use audio::convert_audio;
 pub use textures::convert_textures;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -28,6 +30,8 @@ impl Converter {
         std::fs::create_dir_all(&self.out)?;
         let mut manifest = Manifest { format_version: FORMAT_VERSION, ..Default::default() };
         manifest.sections.insert("textures".into(), convert_textures(self)?);
+        manifest.sections.insert("sounds".into(), convert_audio(self, "Sound", "sounds")?);
+        manifest.sections.insert("music".into(), convert_audio(self, "Music", "music")?);
         write_json(&self.out.join("manifest.json"), &manifest)?;
         Ok(manifest)
     }
