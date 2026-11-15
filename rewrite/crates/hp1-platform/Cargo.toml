@@ -1,0 +1,11 @@
+[package]
+name = "hp1-platform"
+description = "Window, input and audio output for the HP1 rewrite (SDL3)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+sdl3.workspace = true

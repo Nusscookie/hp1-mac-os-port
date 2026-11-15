@@ -1,0 +1,18 @@
+[package]
+name = "hp1-viewer"
+description = "Fly through a converted HP1 map."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+hp1-data.workspace = true
+hp1-engine.workspace = true
+hp1-render.workspace = true
+hp1-platform.workspace = true
+anyhow.workspace = true
+glam.workspace = true
+png.workspace = true
+serde_json.workspace = true

@@ -14,11 +14,17 @@ ue1-read = { path = "crates/ue1-read" }
 hp1-data = { path = "crates/hp1-data" }
 hp1-convert = { path = "crates/hp1-convert" }
 hp1-engine = { path = "crates/hp1-engine" }
+hp1-render = { path = "crates/hp1-render" }
+hp1-platform = { path = "crates/hp1-platform" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = "0.18"
 rayon = "1"
-glam = "0.30"
+glam = { version = "0.30", features = ["bytemuck"] }
+wgpu = "30"
+sdl3 = { version = "0.22", features = ["raw-window-handle", "build-from-source-static"] }
+pollster = "1"
+bytemuck = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 anyhow = "1"
 

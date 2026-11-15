@@ -6,6 +6,7 @@
 //!   hp1-tools check-data <game folder>     read every package and object property list
 //!   hp1-tools convert <game folder> <out>  write the game in the rewrite's own formats
 //!   hp1-tools render-mesh <converted> <mesh> <out.png> [sequence] [0..1]   software preview
+//!   hp1-tools light-maps <converted> <map> <out.png>   a level's light maps side by side
 
 mod preview;
 
@@ -22,7 +23,8 @@ const USAGE: &str = "usage:
   hp1-tools props <package> <object>
   hp1-tools check-data <game folder>
   hp1-tools convert <game folder> <output folder>
-  hp1-tools render-mesh <converted folder> <mesh> <out.png> [sequence] [time 0..1]";
+  hp1-tools render-mesh <converted folder> <mesh> <out.png> [sequence] [time 0..1]
+  hp1-tools light-maps <converted folder> <map> <out.png>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +42,9 @@ fn main() -> ExitCode {
             args.get(5).and_then(|t| t.parse().ok()).unwrap_or(0.0),
         )
         .map(|_| ExitCode::SUCCESS),
+        Some("light-maps") if args.len() == 4 => {
+            preview::light_maps(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

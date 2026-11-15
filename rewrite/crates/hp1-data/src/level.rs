@@ -134,7 +134,6 @@ pub struct Actor {
     /// Values set on this object in the map (class defaults come from `classes.json`).
     pub props: PropMap,
     /// Key into `LevelFile::brushes` for brush actors.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brush: Option<String>,
 }
 

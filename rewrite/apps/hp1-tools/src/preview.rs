@@ -169,3 +169,43 @@ pub fn render_mesh(data: &Path, mesh_path: &str, out: &Path, seq: Option<&str>, 
     hp1_convert::write_png(out, w, h, &color).map_err(|e| anyhow!("{e}"))?;
     Ok(())
 }
+
+/// Packs a level's light maps into one image (rows of maps, 2× scaled, ×2 brightness like the game).
+pub fn light_maps(data: &Path, map: &str, out: &Path) -> Result<()> {
+    let level: hp1_data::level::LevelFile = load_binary(&data.join("levels").join(format!("{map}.level")))?;
+    let classes: hp1_data::ClassTable = serde_json::from_slice(&std::fs::read(data.join("classes.json"))?)?;
+    let t = std::time::Instant::now();
+    let maps = hp1_engine::lighting::build_level_light_maps(&level, &classes);
+    let built = maps.iter().flatten().count();
+    println!("{built} of {} light maps built in {:.2?}", maps.len(), t.elapsed());
+    let width = 2048u32;
+    let (mut x, mut y, mut row_h) = (0u32, 0u32, 0u32);
+    let mut placed = Vec::new();
+    for m in maps.iter().flatten() {
+        let (w, h) = (m.width * 2 + 2, m.height * 2 + 2);
+        if x + w > width {
+            x = 0;
+            y += row_h;
+            row_h = 0;
+        }
+        placed.push((m, x, y));
+        x += w;
+        row_h = row_h.max(h);
+    }
+    let height = (y + row_h).max(1);
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
+    for (m, ox, oy) in placed {
+        for ty in 0..m.height * 2 {
+            for tx in 0..m.width * 2 {
+                let c = m.texels[((ty / 2) * m.width + tx / 2) as usize];
+                let i = (((oy + ty) * width + ox + tx) * 4) as usize;
+                for k in 0..3 {
+                    rgba[i + k] = (c[k] * 2.0 * 255.0).min(255.0) as u8;
+                }
+                rgba[i + 3] = 255;
+            }
+        }
+    }
+    hp1_convert::write_png(out, width, height, &rgba).map_err(|e| anyhow!("{e}"))?;
+    Ok(())
+}

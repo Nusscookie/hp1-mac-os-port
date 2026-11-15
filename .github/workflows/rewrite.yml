@@ -22,6 +22,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      # SDL3 is built from source; on Linux it needs the window-system and audio headers.
+      - if: runner.os == 'Linux'
+        run: >
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build libx11-dev libxext-dev
+          libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev
+          libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libdrm-dev libgbm-dev libasound2-dev
+          libpulse-dev libudev-dev libdbus-1-dev
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test

@@ -25,12 +25,14 @@ pub mod level;
 pub mod mesh;
 
 /// Bumped whenever a converted file changes shape; the game asks for a re-convert on mismatch.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// A property value copied from the CD, in plain form. References to other objects become their
 /// full dotted path (`Package.Group.Name`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+///
+/// In JSON the value is written bare (`64`, `"Text"`, `{"x":..}`); in binary files it carries a
+/// variant tag, because binary formats cannot guess the variant back.
+#[derive(Clone, Debug, PartialEq)]
 pub enum DataValue {
     Bool(bool),
     Int(i64),
@@ -58,6 +60,120 @@ pub enum DataValue {
         hex: String,
     },
     Null,
+}
+
+macro_rules! data_value_mirror {
+    ($name:ident, $($attr:meta)?) => {
+        #[derive(Serialize, Deserialize)]
+        $(#[$attr])?
+        enum $name {
+            Bool(bool),
+            Int(i64),
+            Float(f64),
+            Str(String),
+            Vector { x: f32, y: f32, z: f32 },
+            Rotator { pitch: i32, yaw: i32, roll: i32 },
+            Color { r: u8, g: u8, b: u8, a: u8 },
+            Struct { r#struct: String, hex: String },
+            Null,
+        }
+        impl From<DataValue> for $name {
+            fn from(v: DataValue) -> Self {
+                match v {
+                    DataValue::Bool(b) => Self::Bool(b),
+                    DataValue::Int(i) => Self::Int(i),
+                    DataValue::Float(f) => Self::Float(f),
+                    DataValue::Str(s) => Self::Str(s),
+                    DataValue::Vector { x, y, z } => Self::Vector { x, y, z },
+                    DataValue::Rotator { pitch, yaw, roll } => Self::Rotator { pitch, yaw, roll },
+                    DataValue::Color { r, g, b, a } => Self::Color { r, g, b, a },
+                    DataValue::Struct { r#struct, hex } => Self::Struct { r#struct, hex },
+                    DataValue::Null => Self::Null,
+                }
+            }
+        }
+        impl From<$name> for DataValue {
+            fn from(v: $name) -> Self {
+                match v {
+                    $name::Bool(b) => Self::Bool(b),
+                    $name::Int(i) => Self::Int(i),
+                    $name::Float(f) => Self::Float(f),
+                    $name::Str(s) => Self::Str(s),
+                    $name::Vector { x, y, z } => Self::Vector { x, y, z },
+                    $name::Rotator { pitch, yaw, roll } => Self::Rotator { pitch, yaw, roll },
+                    $name::Color { r, g, b, a } => Self::Color { r, g, b, a },
+                    $name::Struct { r#struct, hex } => Self::Struct { r#struct, hex },
+                    $name::Null => Self::Null,
+                }
+            }
+        }
+    };
+}
+data_value_mirror!(UntaggedValue, serde(untagged));
+data_value_mirror!(TaggedValue,);
+
+impl Serialize for DataValue {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if s.is_human_readable() {
+            UntaggedValue::from(self.clone()).serialize(s)
+        } else {
+            TaggedValue::from(self.clone()).serialize(s)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DataValue {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        if d.is_human_readable() {
+            UntaggedValue::deserialize(d).map(Into::into)
+        } else {
+            TaggedValue::deserialize(d).map(Into::into)
+        }
+    }
+}
+
+impl DataValue {
+    pub fn as_f32(&self) -> Option<f32> {
+        match *self {
+            DataValue::Int(i) => Some(i as f32),
+            DataValue::Float(f) => Some(f as f32),
+            DataValue::Bool(b) => Some(b as u8 as f32),
+            _ => None,
+        }
+    }
+    pub fn as_i64(&self) -> Option<i64> {
+        match *self {
+            DataValue::Int(i) => Some(i),
+            DataValue::Float(f) => Some(f as i64),
+            DataValue::Bool(b) => Some(b as i64),
+            _ => None,
+        }
+    }
+    pub fn as_bool(&self) -> Option<bool> {
+        match *self {
+            DataValue::Bool(b) => Some(b),
+            DataValue::Int(i) => Some(i != 0),
+            _ => None,
+        }
+    }
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            DataValue::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_vec3(&self) -> Option<[f32; 3]> {
+        match *self {
+            DataValue::Vector { x, y, z } => Some([x, y, z]),
+            _ => None,
+        }
+    }
+    pub fn as_rotator(&self) -> Option<[i32; 3]> {
+        match *self {
+            DataValue::Rotator { pitch, yaw, roll } => Some([pitch, yaw, roll]),
+            _ => None,
+        }
+    }
 }
 
 /// Properties by name. Array elements other than the first are stored as `Name[i]`.
@@ -217,4 +333,22 @@ pub struct SectionReport {
     /// Converted, but with something missing (e.g. a reference to a package not on the CD).
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_round_trip_in_binary() {
+        let mut m = PropMap::new();
+        m.insert("A".into(), DataValue::Int(3));
+        m.insert("B".into(), DataValue::Float(0.5));
+        m.insert("C".into(), DataValue::Vector { x: 1.0, y: 2.0, z: 3.0 });
+        m.insert("D".into(), DataValue::Str("x".into()));
+        m.insert("E".into(), DataValue::Null);
+        let bytes = postcard::to_stdvec(&m).unwrap();
+        let back: PropMap = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(m, back);
+    }
 }
