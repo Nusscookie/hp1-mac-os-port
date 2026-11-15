@@ -1,0 +1,28 @@
+# Builds and tests the Rust rewrite on macOS, Windows and Linux. No game data is available here,
+# so only the unit tests run; the full data check (hp1-tools check-data) runs locally.
+name: rewrite
+
+on:
+  push:
+    branches: [rust-rewrite]
+    paths: ["rewrite/**", ".github/workflows/rewrite.yml"]
+  pull_request:
+    paths: ["rewrite/**", ".github/workflows/rewrite.yml"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: rewrite
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release

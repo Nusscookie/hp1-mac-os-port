@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "Zlib"
+repository = "https://github.com/Nusscookie/hp1-mac-os-port"
+publish = false
+
+[workspace.dependencies]
+ue1-read = { path = "crates/ue1-read" }
+anyhow = "1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

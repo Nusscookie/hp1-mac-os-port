@@ -1,0 +1,10 @@
+[package]
+name = "ue1-read"
+description = "Reads Unreal Engine 1 packages from the Harry Potter 1 CD. Used only by the converter."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]

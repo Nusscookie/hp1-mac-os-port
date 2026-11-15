@@ -10,6 +10,10 @@ insert it and copies the game data from it.
 > Unofficial fan project. Not affiliated with or endorsed by Warner Bros., Electronic Arts, KnowWonder/Amaze
 > Entertainment or J.K. Rowling. Harry Potter names and characters are trademarks of Warner Bros. Entertainment Inc.
 
+> **Branch `rust-rewrite`:** work in progress on a from-scratch Rust engine that will also run on Windows,
+> Linux and mobile, with every behaviour written by hand. See [`rewrite/README.md`](rewrite/README.md). The
+> playable version is the SurrealEngine port on `main`.
+
 ## How it works
 
 The original game is built on Unreal Engine 1, and its gameplay is written in UnrealScript, stored inside the

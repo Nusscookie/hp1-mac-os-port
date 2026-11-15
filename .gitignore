@@ -6,3 +6,4 @@ engine/build/
 __pycache__/
 *.pyc
 engine/build-release/
+rewrite/target/
