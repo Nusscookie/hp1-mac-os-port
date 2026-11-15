@@ -85,6 +85,21 @@ fn cmd_props(path: &str, object: &str) -> Result<ExitCode> {
     let pkg = Package::open(path)?;
     let idx = pkg.find_export(object, None).with_context(|| format!("no export named {object}"))?;
     let e = &pkg.exports[idx];
+    if pkg.class_name(e) == "Class" {
+        let c = ue1_read::class::read_class(&pkg, idx)?;
+        println!(
+            "class {} extends {} (config {}){}",
+            c.name,
+            pkg.ref_path(c.parent),
+            c.config_name,
+            if c.located_from_end { ", defaults located from the end" } else { "" }
+        );
+        for p in c.defaults.iter() {
+            let index = if p.array_index > 0 { format!("[{}]", p.array_index) } else { String::new() };
+            println!("  {}{index} = {}", p.name, show_value(&pkg, &p.value));
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     if pkg.is_field_export(e) {
         bail!("{object} is a {} (a script definition), not an object with properties", pkg.class_name(e));
     }
@@ -150,6 +165,8 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
     let paths = find_packages(game)?;
     let (mut objects, mut props, mut failures) = (0usize, 0usize, 0usize);
     let mut failed_packages = 0usize;
+    let (mut classes, mut from_end) = (0usize, 0usize);
+    let mut from_end_names = Vec::new();
     for path in &paths {
         let pkg = match Package::open(path) {
             Ok(p) => p,
@@ -161,6 +178,18 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
         };
         let mut pkg_failures = Vec::new();
         for (i, e) in pkg.exports.iter().enumerate() {
+            if pkg.class_name(e) == "Class" {
+                classes += 1;
+                match ue1_read::class::read_class(&pkg, i) {
+                    Ok(c) if c.located_from_end => {
+                        from_end += 1;
+                        from_end_names.push(c.name);
+                    }
+                    Ok(_) => {}
+                    Err(err) => pkg_failures.push(format!("class {}: {err}", pkg.name(e.name))),
+                }
+                continue;
+            }
             if e.size == 0 || pkg.is_field_export(e) {
                 continue;
             }
@@ -189,5 +218,9 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
         "{} packages, {objects} objects, {props} properties; {failed_packages} packages with errors, {failures} objects failed",
         paths.len()
     );
+    println!("{classes} classes read, {from_end} with class-level code (defaults located from the end)");
+    if !from_end_names.is_empty() {
+        println!("    {}", from_end_names.join(", "));
+    }
     Ok(if failed_packages == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }

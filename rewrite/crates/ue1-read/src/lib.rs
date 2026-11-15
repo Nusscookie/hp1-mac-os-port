@@ -5,6 +5,7 @@
 //! values, and later textures, meshes, sounds and levels). It never runs or interprets
 //! UnrealScript: script bytecode and script text are skipped.
 
+pub mod class;
 mod library;
 mod object;
 mod package;

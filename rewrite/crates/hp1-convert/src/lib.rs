@@ -3,6 +3,8 @@
 //! Script code inside the packages is never read.
 
 mod audio;
+mod classes;
+mod text;
 mod textures;
 
 use std::path::{Path, PathBuf};
@@ -11,18 +13,21 @@ use hp1_data::{DataValue, FORMAT_VERSION, Manifest, PropMap};
 use ue1_read::{Library, Package, Props, Value};
 
 pub use audio::convert_audio;
+pub use classes::convert_classes;
+pub use text::convert_text;
 pub use textures::convert_textures;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub struct Converter {
     pub lib: Library,
+    pub game: PathBuf,
     pub out: PathBuf,
 }
 
 impl Converter {
     pub fn new(game: &Path, out: &Path) -> Result<Self> {
-        Ok(Self { lib: Library::scan(game)?, out: out.to_owned() })
+        Ok(Self { lib: Library::scan(game)?, game: game.to_owned(), out: out.to_owned() })
     }
 
     /// Converts everything and writes `manifest.json`.
@@ -32,6 +37,8 @@ impl Converter {
         manifest.sections.insert("textures".into(), convert_textures(self)?);
         manifest.sections.insert("sounds".into(), convert_audio(self, "Sound", "sounds")?);
         manifest.sections.insert("music".into(), convert_audio(self, "Music", "music")?);
+        manifest.sections.insert("classes".into(), convert_classes(self)?);
+        manifest.sections.insert("text".into(), convert_text(self, &self.game)?);
         write_json(&self.out.join("manifest.json"), &manifest)?;
         Ok(manifest)
     }
