@@ -6,11 +6,11 @@
 //!
 //! Sounds and music are not played here. They are collected in `outputs` for the program to play.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use glam::{Mat3, Vec3};
 use hp1_data::ClassTable;
-use hp1_data::level::LevelFile;
+use hp1_data::level::{Actor, LevelFile};
 
 use crate::collision::{Collider, Hit, overlaps_model, trace_model};
 use crate::props::ActorProps;
@@ -56,6 +56,15 @@ pub trait Behaviour {
     fn bump(&mut self, _w: &mut World, _me: ActorId, _other: ActorId) {}
 }
 
+/// The animation a character plays, for the program to draw.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Animation {
+    /// Sequence name, e.g. `Walk`.
+    pub name: String,
+    /// Seconds into the sequence (it loops).
+    pub time: f32,
+}
+
 pub struct Entity {
     pub name: String,
     pub class: String,
@@ -81,6 +90,8 @@ pub struct Entity {
     pub base: Option<ActorId>,
     pub sound_radius: f32,
     pub sound_volume: f32,
+    /// Set by characters whose behaviour chooses their animation; None plays the map's own.
+    pub anim: Option<Animation>,
     pub behaviour: Option<Box<dyn Behaviour>>,
 }
 
@@ -114,6 +125,7 @@ impl Entity {
             base: None,
             sound_radius: (p.byte("SoundRadius", 32) as f32 + 1.0) * 25.0,
             sound_volume: (p.byte("SoundVolume", 128) as f32 / 255.0).min(1.0),
+            anim: None,
             behaviour: None,
         }
     }
@@ -140,6 +152,7 @@ impl Entity {
             base: None,
             sound_radius: 825.0,
             sound_volume: 1.0,
+            anim: None,
             behaviour: None,
         }
     }
@@ -149,6 +162,20 @@ impl Entity {
         let r = Mat3::from_mat4(rotator_matrix(self.rot[0], self.rot[1], self.rot[2]));
         let pivot = self.brush.as_ref().map_or(Vec3::ZERO, |b| b.1);
         (r, self.pos - r * pivot)
+    }
+
+    /// Half-size of the axis-aligned box that blocks movement. Box-shaped collision is
+    /// `radius` long and `width` wide along its facing; turned, it takes the box around it
+    /// (exact for quarter turns, which is how the maps use it).
+    pub fn blocking_half(&self) -> Vec3 {
+        match self.width {
+            Some(w) => {
+                let (s, c) = (self.rot[1] as f32 * crate::units::ROT_TO_RAD).sin_cos();
+                let (s, c) = (s.abs(), c.abs());
+                Vec3::new(c * self.radius + s * w, s * self.radius + c * w, self.height)
+            }
+            None => Vec3::new(self.radius, self.radius, self.height),
+        }
     }
 
     /// Whether a pawn box at `pos` with half-size `extent` touches this object's collision.
@@ -176,7 +203,12 @@ pub struct World {
     pub actors: Vec<Option<Entity>>,
     pub time: f32,
     pub outputs: Vec<Output>,
+    /// Objects spawned by `spawn_actor` since the program last looked, for it to load their meshes.
+    pub spawned: Vec<ActorId>,
     touching: HashSet<(ActorId, ActorId)>,
+    /// Settings of spawned objects (placed ones are in `level.actors`).
+    extra: HashMap<ActorId, Actor>,
+    rng: u64,
 }
 
 impl World {
@@ -190,12 +222,59 @@ impl World {
                 e
             }));
         }
-        Self { level, classes, actors, time: 0.0, outputs: Vec::new(), touching: HashSet::new() }
+        Self {
+            level,
+            classes,
+            actors,
+            time: 0.0,
+            outputs: Vec::new(),
+            spawned: Vec::new(),
+            touching: HashSet::new(),
+            extra: HashMap::new(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+        }
     }
 
     pub fn spawn(&mut self, e: Entity) -> ActorId {
         self.actors.push(Some(e));
         self.actors.len() - 1
+    }
+
+    /// Adds an object as if it had been placed with these settings, behaviour included.
+    pub fn spawn_actor(&mut self, actor: Actor) -> ActorId {
+        let e = {
+            let p = ActorProps::new(&actor, &self.classes);
+            let mut e = Entity::from_props(&actor.name, &actor.class, &p, None);
+            e.behaviour = crate::behaviours::make(&actor.class, &p, &self.classes);
+            e
+        };
+        let id = self.spawn(e);
+        self.extra.insert(id, actor);
+        self.spawned.push(id);
+        id
+    }
+
+    /// An object's settings: placed in the level or spawned later.
+    pub fn actor_data(&self, id: ActorId) -> Option<&Actor> {
+        self.level.actors.get(id).and_then(Option::as_ref).or_else(|| self.extra.get(&id))
+    }
+
+    /// A random number in 0..n (n > 0).
+    pub fn rand(&mut self, n: usize) -> usize {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng % n.max(1) as u64) as usize
+    }
+
+    /// Takes an object out of the level for good.
+    pub fn remove(&mut self, id: ActorId) {
+        if let Some(slot) = self.actors.get_mut(id) {
+            *slot = None;
+            self.outputs.push(Output::AmbientStop { actor: id });
+        }
+        self.extra.remove(&id);
+        self.touching.retain(|&(a, b)| a != id && b != id);
     }
 
     pub fn get(&self, id: ActorId) -> Option<&Entity> {
@@ -400,8 +479,7 @@ impl Collider for WorldCollider<'_> {
                 if Some(i) == self.ignore || !e.block_players || !e.collide_actors || e.brush.is_some() {
                     continue;
                 }
-                let half = Vec3::new(e.radius, e.radius, e.height);
-                if let Some((time, normal)) = sweep_aabb(start, end, extent, e.pos, half) {
+                if let Some((time, normal)) = sweep_aabb(start, end, extent, e.pos, e.blocking_half()) {
                     keep(Hit { time, normal, node: 0, actor: Some(i) });
                 }
             }

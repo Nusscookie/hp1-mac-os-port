@@ -271,6 +271,8 @@ fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
 }
 
 fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &mut Loaded, time: f32) {
+    let spawned = std::mem::take(&mut l.world.spawned);
+    l.actors.follow(&l.world, &spawned);
     let moving = l.actors.build_moving(time);
     scene.geometry[2].update(gpu, &moving.vertices, &moving.indices, moving.batches);
     if let Some((v, i, b)) = l.movers.build_if_moved(&l.world) {
@@ -319,6 +321,10 @@ fn main() -> Result<()> {
         }
         for o in loaded.world.outputs.drain(..) {
             println!("world: {o:?}");
+        }
+        for e in loaded.world.actors.iter().flatten().filter(|e| e.anim.is_some()) {
+            let a = e.anim.as_ref().map_or("", |a| a.name.as_str());
+            println!("character {} ({}) at {:.0} playing {a}", e.name, e.class, e.pos);
         }
         if args.walk {
             let mut p =

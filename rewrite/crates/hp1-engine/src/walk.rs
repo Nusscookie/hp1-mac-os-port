@@ -101,6 +101,28 @@ impl Body {
         }
     }
 
+    /// One tick of scripted movement: the horizontal velocity is set directly, as for characters
+    /// walking a route. Gravity, steps, slopes and walls work as in `tick`.
+    pub fn drive(&mut self, model: &dyn Collider, m: &Movement, vel: glam::Vec2, dt: f32) {
+        if dt <= 0.0 {
+            return;
+        }
+        if model.overlaps(self.pos, self.extent) {
+            self.settle(model);
+        }
+        self.vel = vel.extend(self.vel.z);
+        match self.mode {
+            Mode::Walking => {
+                self.vel.z = 0.0;
+                self.walk(model, m, dt);
+            }
+            Mode::Falling => {
+                self.vel.z += m.gravity * dt;
+                self.fall(model, m, dt);
+            }
+        }
+    }
+
     /// Speeds the horizontal velocity up towards `wish * max` and lets friction slow the rest.
     fn accelerate(&mut self, wish: Vec3, accel: f32, max: f32, friction: f32, dt: f32) {
         let mut v = self.vel.xy();

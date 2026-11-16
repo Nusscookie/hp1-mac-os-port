@@ -15,6 +15,7 @@ use hp1_engine::level_mesh::poly_flags;
 use hp1_engine::lighting::{LightSource, level_lights, vertex_light, zone_ambient};
 use hp1_engine::props::ActorProps;
 use hp1_engine::units::rotator_matrix;
+use hp1_engine::world::World;
 use hp1_render::{Blend, DrawBatch, Vertex};
 
 use crate::textures::Textures;
@@ -22,14 +23,22 @@ use crate::textures::Textures;
 /// How an object is drawn (the `DrawType` setting).
 const DRAW_MESH: i64 = 2;
 
+#[derive(Clone)]
 enum Motion {
     Still,
     Skeletal { anim: Arc<AnimFile>, links: Vec<Option<usize>>, seq: usize },
     Frames { start: u32, frames: u32, rate: f32 },
 }
 
+#[derive(Clone)]
 struct Instance {
     mesh: Arc<MeshFile>,
+    /// The world object it shows, once the world drives it (position, facing, animation).
+    actor: Option<usize>,
+    /// The class's PrePivot and DrawScale, for placing it where the world has it.
+    fit: (Vec3, f32),
+    /// Seconds into the animation chosen by the world, instead of free running.
+    driven: Option<f32>,
     motion: Motion,
     to_world: Mat4,
     /// Per material: texture index and blend.
@@ -52,6 +61,8 @@ pub struct Actors {
     /// The player class's PrePivot and DrawScale.
     player_fit: (Vec3, f32),
     all_lights: Vec<LightSource>,
+    /// Ready-made instances of classes that the level may spawn later.
+    templates: HashMap<String, Instance>,
 }
 
 /// What loading an object's mesh needs; kept so the player can be loaded the same way.
@@ -106,6 +117,7 @@ impl Actors {
             player: None,
             player_fit: (Vec3::ZERO, 1.0),
             all_lights: Vec::new(),
+            templates: HashMap::new(),
         };
         for (n, actor) in level.actors.iter().enumerate() {
             let Some(actor) = actor else { continue };
@@ -113,18 +125,62 @@ impl Actors {
             if p.int("DrawType", 1) != DRAW_MESH || p.bool("bHidden") || p.get("Mesh").is_none() {
                 continue;
             }
-            let Some(inst) = loader.instance(&p, level, classes, textures, &all_lights, n) else {
+            let Some(mut inst) = loader.instance(&p, level, classes, textures, &all_lights, n) else {
                 out.skipped += 1;
                 continue;
             };
             out.count += 1;
+            inst.actor = Some(n);
             match inst.motion {
                 Motion::Skeletal { .. } | Motion::Frames { frames: 2.., .. } => out.moving.push(inst),
                 _ => out.still.push(inst),
             }
         }
+        // Characters that triggers can spawn during play.
+        let spawnable: std::collections::BTreeSet<String> = level
+            .actors
+            .iter()
+            .flatten()
+            .flat_map(|a| a.props.iter())
+            .filter(|(k, _)| k.starts_with("BaseCharToSpawn"))
+            .filter_map(|(_, v)| v.as_str().map(str::to_owned))
+            .collect();
+        for class in spawnable {
+            let actor = hp1_data::level::Actor {
+                name: class.clone(),
+                class: class.clone(),
+                props: Default::default(),
+                brush: None,
+            };
+            let p = ActorProps::new(&actor, classes);
+            if let Some(inst) = loader.instance(&p, level, classes, textures, &[], out.templates.len()) {
+                out.templates.insert(class.to_ascii_lowercase(), inst);
+            }
+        }
         out.all_lights = all_lights;
         Ok(out)
+    }
+
+    /// Follows the world: shows newly spawned characters and puts every character the world
+    /// drives where it is now, playing its animation. Objects the world removed disappear.
+    pub fn follow(&mut self, world: &World, spawned: &[usize]) {
+        for &id in spawned {
+            let Some(a) = world.actor_data(id) else { continue };
+            if let Some(t) = self.templates.get(&a.class.to_ascii_lowercase()) {
+                let mut inst = t.clone();
+                inst.actor = Some(id);
+                self.moving.push(inst);
+            }
+        }
+        let (level, classes) = (&world.level, &world.classes);
+        let all_lights = &self.all_lights;
+        self.moving.retain_mut(|inst| {
+            let Some(id) = inst.actor else { return true };
+            let Some(e) = world.get(id) else { return false };
+            let Some(anim) = &e.anim else { return true };
+            place(inst, level, classes, all_lights, e.pos, e.rot[1], &anim.name, anim.time);
+            true
+        });
     }
 
     /// Loads the player's character (an object of `class` placed by code).
@@ -165,20 +221,9 @@ impl Actors {
         time: f32,
     ) {
         let Some(p) = &mut self.player else { return };
-        let (pivot, scale) = self.player_fit;
-        p.to_world = Mat4::from_translation(pos + pivot)
-            * rotator_matrix(0, (yaw / hp1_engine::units::ROT_TO_RAD) as i32, 0)
-            * Mat4::from_scale(Vec3::splat(scale))
-            * mesh_to_object(&p.mesh.transform);
-        if let Motion::Skeletal { anim: file, seq, .. } = &mut p.motion
-            && let Some(i) = file.sequences.iter().position(|s| s.info.name.eq_ignore_ascii_case(anim))
-        {
-            *seq = i;
-        }
-        p.phase = time;
-        p.lights =
-            self.all_lights.iter().filter(|l| l.location.distance(pos) < l.radius + 100.0).copied().collect();
-        p.ambient = zone_ambient(level, classes, zone_at(&level.model, pos));
+        p.fit = self.player_fit;
+        let yaw = (yaw / hp1_engine::units::ROT_TO_RAD) as i32;
+        place(p, level, classes, &self.all_lights, pos, yaw, anim, time);
     }
 
     pub fn build_player(&self) -> Built {
@@ -192,6 +237,35 @@ impl Actors {
     pub fn build_moving(&self, time: f32) -> Built {
         build(&self.moving, time)
     }
+}
+
+/// Puts an instance at collision centre `pos`, facing `yaw` (rotation units), playing the
+/// sequence `anim` at `time` seconds into it.
+#[allow(clippy::too_many_arguments)]
+fn place(
+    inst: &mut Instance,
+    level: &LevelFile,
+    classes: &ClassTable,
+    all_lights: &[LightSource],
+    pos: Vec3,
+    yaw: i32,
+    anim: &str,
+    time: f32,
+) {
+    let (pivot, scale) = inst.fit;
+    inst.to_world = Mat4::from_translation(pos + pivot)
+        * rotator_matrix(0, yaw, 0)
+        * Mat4::from_scale(Vec3::splat(scale))
+        * mesh_to_object(&inst.mesh.transform);
+    if let Motion::Skeletal { anim: file, seq, .. } = &mut inst.motion
+        && let Some(i) = file.sequences.iter().position(|s| s.info.name.eq_ignore_ascii_case(anim))
+    {
+        *seq = i;
+    }
+    inst.driven = Some(time);
+    inst.lights =
+        all_lights.iter().filter(|l| l.location.distance(pos) < l.radius + 100.0).copied().collect();
+    inst.ambient = zone_ambient(level, classes, zone_at(&level.model, pos));
 }
 
 impl Loader<'_> {
@@ -301,6 +375,9 @@ impl Loader<'_> {
         };
         Some(Instance {
             mesh,
+            actor: None,
+            fit: (Vec3::from(p.vec3("PrePivot")), scale),
+            driven: None,
             to_world,
             materials,
             lights,
@@ -316,7 +393,11 @@ fn points(inst: &Instance, time: f32) -> Vec<Vec3> {
     match (&inst.mesh.body, &inst.motion) {
         (MeshBody::Skeletal { bones, influences, .. }, Motion::Skeletal { anim, links, seq }) => {
             let s = &anim.sequences[*seq];
-            let t = if s.duration > 0.0 { (time + inst.phase * s.duration) % s.duration } else { 0.0 };
+            let t = match inst.driven {
+                _ if s.duration <= 0.0 => 0.0,
+                Some(t) => t % s.duration,
+                None => (time + inst.phase * s.duration) % s.duration,
+            };
             skin(influences, &bone_matrices(bones, &sample(bones, links, s, t)))
         }
         (MeshBody::Skeletal { points, .. }, _) => points.iter().map(|p| Vec3::from(*p)).collect(),

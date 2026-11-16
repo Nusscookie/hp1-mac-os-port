@@ -10,6 +10,7 @@
 //!   hp1-tools actors <converted> <map> [filter]          placed objects with class and position
 //!   hp1-tools fire <converted> <texture> <out.png>       a fire texture after 1, 2 and 4 seconds
 //!   hp1-tools check-audio <converted>                   decode every sound and music file
+//!   hp1-tools walk <converted> <map> x,y,z x,y,z [radius] a character walking from A to B
 
 mod preview;
 
@@ -32,6 +33,7 @@ const USAGE: &str = "usage:
   hp1-tools fire <converted folder> <texture> <out.png>
   hp1-tools check-audio <converted folder>
   hp1-tools collide <converted folder> <map>
+  hp1-tools walk <converted folder> <map> <from x,y,z> <to x,y,z> [radius]
   hp1-tools sequences <converted folder> <anim file, e.g. anims/HarryPotter/skharryAnims.anim>";
 
 fn main() -> ExitCode {
@@ -64,6 +66,13 @@ fn main() -> ExitCode {
         }
         Some("check-audio") if args.len() == 2 => cmd_check_audio(Path::new(&args[1])),
         Some("collide") if args.len() == 3 => cmd_collide(Path::new(&args[1]), &args[2]),
+        Some("walk") if (5..=6).contains(&args.len()) => cmd_walk(
+            Path::new(&args[1]),
+            &args[2],
+            &args[3],
+            &args[4],
+            args.get(5).and_then(|r| r.parse().ok()).unwrap_or(22.0),
+        ),
         Some("sequences") if args.len() == 3 => cmd_sequences(&Path::new(&args[1]).join(&args[2])),
         _ => {
             eprintln!("{USAGE}");
@@ -264,6 +273,68 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
 
 /// Drops a Harry-sized box from every player start and every 50th placed object, traces lines
 /// outwards from the first start and walks Harry from there: a quick check of collision on a map.
+fn parse_point(s: &str) -> Result<glam::Vec3> {
+    let n: Vec<f32> = s.split(',').map(|v| v.trim().parse()).collect::<Result<_, _>>()?;
+    let [x, y, z] = n[..] else { bail!("want x,y,z, got {s}") };
+    Ok(glam::Vec3::new(x, y, z))
+}
+
+/// Walks a character (height 42) straight from one point to another for up to 10 seconds and
+/// prints where it gets, plus the floor height under the line between the points.
+fn cmd_walk(data: &Path, map: &str, from: &str, to: &str, radius: f32) -> Result<ExitCode> {
+    use glam::{Vec3, Vec3Swizzles};
+    use hp1_engine::collision::Collider;
+    let (from, to) = (parse_point(from)?, parse_point(to)?);
+    let level: hp1_data::level::LevelFile =
+        hp1_data::mesh::load_binary(&data.join("levels").join(format!("{map}.level")))?;
+    let classes: hp1_data::ClassTable = serde_json::from_slice(&std::fs::read(data.join("classes.json"))?)?;
+    let world = hp1_engine::world::World::new(level, classes);
+    let c = world.collider(None);
+    let extent = Vec3::new(radius, radius, 42.0);
+    println!("floor under the line (feet height):");
+    for i in 0..=20 {
+        let p = from.lerp(to, i as f32 / 20.0);
+        let top = Vec3::new(p.x, p.y, from.z.max(to.z) + 200.0);
+        let floor = c.trace(top, top - Vec3::Z * 1000.0, extent).map(|h| top.z - 1000.0 * h.time - 42.0);
+        println!("  {:6.0} {:6.0}  {}", p.x, p.y, floor.map_or("none".into(), |z| format!("{z:7.1}")));
+    }
+    let mut body = hp1_engine::walk::Body::new(from, radius, 42.0);
+    body.settle(&c);
+    let m = hp1_engine::walk::Movement::default();
+    for step in 0..600 {
+        let dir = (to - body.pos).xy();
+        if dir.length() < 2.0 {
+            println!("arrived after {:.2} s at {:.1}", step as f32 / 60.0, body.pos);
+            return Ok(ExitCode::SUCCESS);
+        }
+        let vel = dir.normalize() * m.ground_speed.min(dir.length() * 60.0);
+        body.drive(&c, &m, vel, 1.0 / 60.0);
+        if step % 15 == 0 {
+            println!("{:5.2} s  {:.1}  {:?}", step as f32 / 60.0, body.pos, body.mode);
+        }
+    }
+    println!("did not arrive; stopped at {:.1}", body.pos);
+    let ahead = (to - body.pos).xy().normalize_or_zero().extend(0.0) * 5.0;
+    let n = Vec3::new(0.0, 0.447, 0.894);
+    let slide = ahead - n * ahead.dot(n);
+    for (what, d) in [
+        ("ahead", ahead),
+        ("up 25", Vec3::Z * 25.0),
+        ("down 5", Vec3::Z * -5.0),
+        ("slide", slide),
+        ("slide+up", slide + Vec3::Z * 0.5),
+    ] {
+        match c.trace(body.pos, body.pos + d, extent) {
+            Some(h) => println!(
+                "  {what}: hit at {:.3} normal {:.3} node {} actor {:?}",
+                h.time, h.normal, h.node, h.actor
+            ),
+            None => println!("  {what}: free"),
+        }
+    }
+    Ok(ExitCode::FAILURE)
+}
+
 fn cmd_collide(data: &Path, map: &str) -> Result<ExitCode> {
     use glam::Vec3;
     use hp1_engine::collision::trace_model as trace;

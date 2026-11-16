@@ -32,6 +32,14 @@ impl<'a> ActorProps<'a> {
     pub fn bool_or(&self, name: &str, fallback: bool) -> bool {
         self.get(name).and_then(DataValue::as_bool).unwrap_or(fallback)
     }
+    /// A name, text or object setting; empty when unset or `None`.
+    pub fn text(&self, name: &str) -> String {
+        self.get(name)
+            .and_then(DataValue::as_str)
+            .filter(|s| !s.eq_ignore_ascii_case("None"))
+            .unwrap_or("")
+            .to_owned()
+    }
     pub fn vec3(&self, name: &str) -> [f32; 3] {
         self.get(name).and_then(DataValue::as_vec3).unwrap_or([0.0; 3])
     }

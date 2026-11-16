@@ -12,6 +12,8 @@ pub fn make(class: &str, p: &ActorProps, classes: &ClassTable) -> Option<Box<dyn
     let is = |c: &str| classes.is_a(class, c);
     if is("Engine.Mover") {
         Some(Box::new(Mover::new(p)))
+    } else if is("HPBase.TriggerSpwnBsChrOnPPnt") {
+        Some(Box::new(crate::character::SpawnOnPatrol::new(p)))
     } else if is("Engine.Trigger") {
         Some(Box::new(Trigger::new(p)))
     } else if is("Engine.Dispatcher") {
@@ -20,6 +22,8 @@ pub fn make(class: &str, p: &ActorProps, classes: &ClassTable) -> Option<Box<dyn
         Some(Box::new(Counter { left: p.byte("NumToCount", 2) as u32 }))
     } else if is("Engine.MusicEvent") {
         Some(Box::new(MusicEvent::new(p)))
+    } else if is("HPBase.baseChar") && p.bool("bFollowPatrolPoints") && !p.bool("bHidden") {
+        Some(Box::new(crate::character::Character::new(p)))
     } else {
         None
     }
@@ -379,7 +383,8 @@ impl Trigger {
         }
     }
 
-    fn cares(&self, w: &World, other: ActorId) -> bool {
+    /// Whether a touch by `other` counts (its TriggerType and whether it is switched on).
+    pub fn cares(&self, w: &World, other: ActorId) -> bool {
         let Some(o) = w.get(other) else { return false };
         self.active
             && match self.kind {
@@ -524,15 +529,15 @@ impl Behaviour for MusicEvent {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::world::Entity;
     use hp1_data::level::{Actor, LevelFile};
 
     /// Name, class and own settings of one placed object.
-    type Placed<'a> = (&'a str, &'a str, Vec<(&'a str, DataValue)>);
+    pub(crate) type Placed<'a> = (&'a str, &'a str, Vec<(&'a str, DataValue)>);
 
-    fn world_with(actors: Vec<Placed>) -> World {
+    pub(crate) fn world_with(actors: Vec<Placed>) -> World {
         let level = LevelFile {
             name: "Test".into(),
             actors: actors
@@ -559,14 +564,19 @@ mod tests {
                 "Engine.Mover": {"parent": "Engine.Brush", "defaults": {}},
                 "Engine.Dispatcher": {"parent": "Engine.Triggers", "defaults": {}},
                 "Engine.Counter": {"parent": "Engine.Triggers", "defaults": {}},
-                "Engine.MusicEvent": {"parent": "Engine.Triggers", "defaults": {}}
+                "Engine.MusicEvent": {"parent": "Engine.Triggers", "defaults": {}},
+                "Engine.NavigationPoint": {"parent": "Engine.Actor", "defaults": {}},
+                "Engine.PatrolPoint": {"parent": "Engine.NavigationPoint", "defaults": {}},
+                "Engine.Pawn": {"parent": "Engine.Actor", "defaults": {}},
+                "HPBase.baseChar": {"parent": "Engine.Pawn", "defaults": {}},
+                "HPBase.TriggerSpwnBsChrOnPPnt": {"parent": "Engine.Trigger", "defaults": {}}
             }}"#,
         )
         .unwrap();
         World::new(level, classes)
     }
 
-    fn s(v: &str) -> DataValue {
+    pub(crate) fn s(v: &str) -> DataValue {
         DataValue::Str(v.into())
     }
 
