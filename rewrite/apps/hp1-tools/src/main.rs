@@ -9,6 +9,7 @@
 //!   hp1-tools light-maps <converted> <map> <out.png>   a level's light maps side by side
 //!   hp1-tools actors <converted> <map> [filter]          placed objects with class and position
 //!   hp1-tools fire <converted> <texture> <out.png>       a fire texture after 1, 2 and 4 seconds
+//!   hp1-tools check-audio <converted>                   decode every sound and music file
 
 mod preview;
 
@@ -28,7 +29,8 @@ const USAGE: &str = "usage:
   hp1-tools render-mesh <converted folder> <mesh> <out.png> [sequence] [time 0..1]
   hp1-tools light-maps <converted folder> <map> <out.png>
   hp1-tools actors <converted folder> <map> [name or class filter]
-  hp1-tools fire <converted folder> <texture> <out.png>";
+  hp1-tools fire <converted folder> <texture> <out.png>
+  hp1-tools check-audio <converted folder>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -55,6 +57,7 @@ fn main() -> ExitCode {
         Some("fire") if args.len() == 4 => {
             preview::fire(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
         }
+        Some("check-audio") if args.len() == 2 => cmd_check_audio(Path::new(&args[1])),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -269,4 +272,37 @@ fn cmd_actors(data: &Path, map: &str, filter: Option<&str>) -> Result<ExitCode> 
         println!("{i:5} {:28} {:32} {:8.0} {:8.0} {:8.0} {seq}", a.name, a.class, loc[0], loc[1], loc[2]);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_check_audio(data: &Path) -> Result<ExitCode> {
+    let mut failed = 0;
+    for section in ["sounds", "music"] {
+        let (mut ok, mut seconds) = (0, 0.0f64);
+        for e in std::fs::read_dir(data.join(section))? {
+            let p = e?.path();
+            if p.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let list: Vec<hp1_data::AudioInfo> = serde_json::from_slice(&std::fs::read(&p)?)?;
+            for a in list {
+                let bytes = std::fs::read(data.join(&a.file))?;
+                match hp1_audio::decode(bytes, &a.format) {
+                    Ok(clip) if clip.frames() > 0 => {
+                        ok += 1;
+                        seconds += clip.seconds() as f64;
+                    }
+                    Ok(_) => {
+                        failed += 1;
+                        println!("{}: no samples", a.path);
+                    }
+                    Err(err) => {
+                        failed += 1;
+                        println!("{}: {err}", a.path);
+                    }
+                }
+            }
+        }
+        println!("{section}: {ok} decoded, {:.0} minutes", seconds / 60.0);
+    }
+    Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }

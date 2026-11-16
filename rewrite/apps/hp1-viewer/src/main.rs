@@ -1,11 +1,13 @@
 //! Fly through a converted map.
 //!
 //!   hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH]
+//!              [--music <name>] [--mute]
 //!
 //! Mouse looks around, WASD moves, Q/E go down/up, Shift is faster, C prints the camera (for
 //! `--camera`), Escape quits. With `--shot` it renders one image without opening a window.
 
 mod actors;
+mod sound;
 mod textures;
 
 use std::path::{Path, PathBuf};
@@ -31,19 +33,25 @@ struct Args {
     shot: Option<PathBuf>,
     camera: Option<[f32; 5]>,
     size: (u32, u32),
+    music: Option<String>,
+    mute: bool,
 }
 
 fn parse_args() -> Result<Args> {
     let mut it = std::env::args().skip(1);
-    let usage =
-        "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH]";
+    let usage = "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH] [--music <name>] [--mute]";
     let data = PathBuf::from(it.next().context(usage)?);
     let map = it.next().context(usage)?;
-    let mut args = Args { data, map, shot: None, camera: None, size: (1280, 800) };
+    let mut args = Args { data, map, shot: None, camera: None, size: (1280, 800), music: None, mute: false };
     while let Some(a) = it.next() {
+        if a == "--mute" {
+            args.mute = true;
+            continue;
+        }
         let v = it.next().with_context(|| format!("{a} needs a value"))?;
         match a.as_str() {
             "--shot" => args.shot = Some(v.into()),
+            "--music" => args.music = Some(v),
             "--camera" => {
                 let n: Vec<f32> = v.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
                 args.camera = Some(n.try_into().map_err(|_| anyhow!("--camera wants 5 numbers"))?);
@@ -98,6 +106,8 @@ struct Loaded {
     actors: actors::Actors,
     animations: Vec<textures::Animation>,
     fires: Vec<textures::FireTexture>,
+    level: LevelFile,
+    classes: ClassTable,
     start: Camera,
     /// Where the sky is seen from (the sky zone's position), if the map has one.
     sky_origin: Option<Vec3>,
@@ -220,6 +230,8 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         actors,
         animations,
         fires,
+        level,
+        classes,
         start,
         sky_origin,
     })
@@ -285,6 +297,29 @@ fn main() -> Result<()> {
         );
         save_png(out, &img)?;
         println!("wrote {}", out.display());
+        if !args.mute {
+            // Check the sound setup without playing anything: mix one second and report its level.
+            let mixer = std::sync::Arc::new(std::sync::Mutex::new(hp1_audio::Mixer::new(44100)));
+            let mut lib = sound::Library::open(&args.data)?;
+            let (count, song) = sound::start(
+                &mut lib,
+                &mixer,
+                &loaded.level,
+                &loaded.classes,
+                args.music.as_deref(),
+                camera.pos,
+            );
+            let (_, right, _) = camera.axes();
+            let mut m = mixer.lock().unwrap_or_else(|e| e.into_inner());
+            m.set_listener(camera.pos, right);
+            let mut buf = vec![0.0f32; 44100 * 2];
+            m.mix(&mut buf);
+            let peak = buf.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+            println!(
+                "{count} ambient sounds, music: {}, peak level of the first second here: {peak:.2}",
+                song.as_deref().unwrap_or("none")
+            );
+        }
         return Ok(());
     }
 
@@ -316,6 +351,33 @@ fn main() -> Result<()> {
     let renderer = WorldRenderer::new(&gpu, format);
     let mut scene = upload(&gpu, &renderer, &loaded);
     let mut depth = hp1_render::create_depth(&gpu, width, height);
+
+    // Sound: ambient sounds of placed objects and one music track.
+    let mixer = std::sync::Arc::new(std::sync::Mutex::new(hp1_audio::Mixer::new(44100)));
+    let _audio = if args.mute {
+        None
+    } else {
+        let m = mixer.clone();
+        match platform.open_audio(44100, move |out| m.lock().unwrap_or_else(|e| e.into_inner()).mix(out)) {
+            Ok(output) => {
+                let mut lib = sound::Library::open(&args.data)?;
+                let (count, song) = sound::start(
+                    &mut lib,
+                    &mixer,
+                    &loaded.level,
+                    &loaded.classes,
+                    args.music.as_deref(),
+                    camera.pos,
+                );
+                println!("{count} ambient sounds, music: {}", song.as_deref().unwrap_or("none"));
+                Some(output)
+            }
+            Err(e) => {
+                eprintln!("no sound: {e}");
+                None
+            }
+        }
+    };
 
     platform.set_mouse_captured(true);
     let mut last = Instant::now();
@@ -365,6 +427,7 @@ fn main() -> Result<()> {
         }
         let speed = if keys.is_scancode_pressed(Scancode::LShift) { 2400.0 } else { 600.0 };
         camera.pos += wish.normalize_or_zero() * speed * dt;
+        mixer.lock().unwrap_or_else(|e| e.into_inner()).set_listener(camera.pos, right);
 
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,

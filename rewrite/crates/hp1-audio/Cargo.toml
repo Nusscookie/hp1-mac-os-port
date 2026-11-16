@@ -1,0 +1,12 @@
+[package]
+name = "hp1-audio"
+description = "Sound decoding and the mixer for the HP1 rewrite."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+symphonia.workspace = true
+glam.workspace = true

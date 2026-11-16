@@ -16,3 +16,4 @@ anyhow.workspace = true
 glam.workspace = true
 png.workspace = true
 serde_json.workspace = true
+hp1-audio.workspace = true

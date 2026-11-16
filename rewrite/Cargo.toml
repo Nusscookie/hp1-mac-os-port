@@ -16,6 +16,7 @@ hp1-convert = { path = "crates/hp1-convert" }
 hp1-engine = { path = "crates/hp1-engine" }
 hp1-render = { path = "crates/hp1-render" }
 hp1-platform = { path = "crates/hp1-platform" }
+hp1-audio = { path = "crates/hp1-audio" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = "0.18"
@@ -24,6 +25,7 @@ glam = { version = "0.30", features = ["bytemuck"] }
 wgpu = "30"
 sdl3 = { version = "0.22", features = ["raw-window-handle", "build-from-source-static"] }
 pollster = "1"
+symphonia = { version = "0.5", default-features = false, features = ["mp1", "mp2", "mp3", "wav", "pcm"] }
 bytemuck = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 anyhow = "1"
