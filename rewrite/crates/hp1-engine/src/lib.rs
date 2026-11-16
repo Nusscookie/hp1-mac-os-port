@@ -3,8 +3,10 @@
 
 pub mod anim;
 pub mod bsp;
+pub mod collision;
 pub mod level_mesh;
 pub mod lighting;
 pub mod procedural;
 pub mod props;
 pub mod units;
+pub mod walk;

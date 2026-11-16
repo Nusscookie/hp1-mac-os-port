@@ -4,7 +4,8 @@
 //!              [--music <name>] [--mute]
 //!
 //! Mouse looks around, WASD moves, Q/E go down/up, Shift is faster, C prints the camera (for
-//! `--camera`), Escape quits. With `--shot` it renders one image without opening a window.
+//! `--camera`), Escape quits. F switches between flying and walking as Harry (Space jumps), which
+//! tests the collision. With `--shot` it renders one image without opening a window.
 
 mod actors;
 mod sound;
@@ -379,6 +380,12 @@ fn main() -> Result<()> {
         }
     };
 
+    // Walking as Harry: his collision size and eye height.
+    let movement = hp1_engine::walk::Movement::default();
+    let eye = 40.75;
+    let mut walker: Option<hp1_engine::walk::Body> = None;
+    let mut jump = false;
+
     platform.set_mouse_captured(true);
     let mut last = Instant::now();
     let started = Instant::now();
@@ -394,6 +401,18 @@ fn main() -> Result<()> {
                     camera.yaw.to_degrees(),
                     camera.pitch.to_degrees()
                 ),
+                Event::KeyDown { keycode: Some(Keycode::F), repeat: false, .. } => {
+                    walker = match walker {
+                        Some(_) => None,
+                        None => {
+                            let mut b = hp1_engine::walk::Body::new(camera.pos - Vec3::Z * eye, 15.0, 42.0);
+                            b.settle(&loaded.level.model);
+                            Some(b)
+                        }
+                    };
+                    println!("{}", if walker.is_some() { "walking" } else { "flying" });
+                }
+                Event::KeyDown { keycode: Some(Keycode::Space), repeat: false, .. } => jump = true,
                 Event::MouseMotion { xrel, yrel, .. } => {
                     camera.yaw += xrel * 0.003;
                     camera.pitch = (camera.pitch - yrel * 0.003).clamp(-1.55, 1.55);
@@ -425,8 +444,20 @@ fn main() -> Result<()> {
                 wish += dir;
             }
         }
-        let speed = if keys.is_scancode_pressed(Scancode::LShift) { 2400.0 } else { 600.0 };
-        camera.pos += wish.normalize_or_zero() * speed * dt;
+        if let Some(body) = &mut walker {
+            let flat = (wish * Vec3::new(1.0, 1.0, 0.0)).normalize_or_zero();
+            let can_jump = body.mode == hp1_engine::walk::Mode::Walking;
+            // Small fixed steps keep the movement the same at any frame rate.
+            let steps = (dt / (1.0 / 120.0)).ceil().max(1.0);
+            for i in 0..steps as usize {
+                body.tick(&loaded.level.model, &movement, flat, jump && can_jump && i == 0, dt / steps);
+            }
+            camera.pos = body.pos + Vec3::Z * eye;
+        } else {
+            let speed = if keys.is_scancode_pressed(Scancode::LShift) { 2400.0 } else { 600.0 };
+            camera.pos += wish.normalize_or_zero() * speed * dt;
+        }
+        jump = false;
         mixer.lock().unwrap_or_else(|e| e.into_inner()).set_listener(camera.pos, right);
 
         let frame = match surface.get_current_texture() {

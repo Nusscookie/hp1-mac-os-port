@@ -30,7 +30,8 @@ const USAGE: &str = "usage:
   hp1-tools light-maps <converted folder> <map> <out.png>
   hp1-tools actors <converted folder> <map> [name or class filter]
   hp1-tools fire <converted folder> <texture> <out.png>
-  hp1-tools check-audio <converted folder>";
+  hp1-tools check-audio <converted folder>
+  hp1-tools collide <converted folder> <map>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -58,6 +59,7 @@ fn main() -> ExitCode {
             preview::fire(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
         }
         Some("check-audio") if args.len() == 2 => cmd_check_audio(Path::new(&args[1])),
+        Some("collide") if args.len() == 3 => cmd_collide(Path::new(&args[1]), &args[2]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -253,6 +255,88 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
         println!("    {}", from_end_names.join(", "));
     }
     Ok(if failed_packages == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+/// Drops a Harry-sized box from every player start and every 50th placed object, traces lines
+/// outwards from the first start and walks Harry from there: a quick check of collision on a map.
+fn cmd_collide(data: &Path, map: &str) -> Result<ExitCode> {
+    use glam::Vec3;
+    use hp1_engine::collision::trace;
+    let level: hp1_data::level::LevelFile =
+        hp1_data::mesh::load_binary(&data.join("levels").join(format!("{map}.level")))?;
+    let model = &level.model;
+    let hulls = model.nodes.iter().filter(|n| n.collision_bound >= 0).count();
+    println!("{} nodes, {hulls} with collision hulls", model.nodes.len());
+    let extent = Vec3::new(16.0, 16.0, 40.0);
+    let t = std::time::Instant::now();
+    let mut traces = 0;
+    let mut first = None;
+    for (i, a) in level.actors.iter().enumerate() {
+        let Some(a) = a else { continue };
+        let start = a.class.ends_with(".PlayerStart");
+        if !start && i % 50 != 0 {
+            continue;
+        }
+        let Some(loc) = a.props.get("Location").and_then(hp1_data::DataValue::as_vec3) else { continue };
+        let from = Vec3::from(loc);
+        let to = from - Vec3::Z * 2000.0;
+        traces += 1;
+        match trace(model, from, to, extent) {
+            Some(h) => {
+                let p = from.lerp(to, h.time);
+                println!(
+                    "{:28} from z {:7.1} lands on z {:7.1} (feet {:7.1}) normal {:5.2} {:5.2} {:5.2}",
+                    a.name,
+                    from.z,
+                    p.z,
+                    p.z - extent.z,
+                    h.normal.x,
+                    h.normal.y,
+                    h.normal.z
+                );
+            }
+            None => println!("{:28} from z {:7.1} falls through", a.name, from.z),
+        }
+        if start && first.is_none() {
+            first = Some(from);
+        }
+    }
+    if let Some(from) = first {
+        for k in 0..8 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_4;
+            let to = from + Vec3::new(a.cos(), a.sin(), 0.0) * 5000.0;
+            traces += 2;
+            let line = trace(model, from, to, Vec3::ZERO).map(|h| h.time * 5000.0);
+            let boxed = trace(model, from, to, extent).map(|h| h.time * 5000.0);
+            println!("direction {:3}°: line hits at {line:?}, box at {boxed:?}", k * 45);
+        }
+    }
+    if let Some(from) = first {
+        use hp1_engine::walk::{Body, Mode, Movement};
+        let m = Movement::default();
+        for k in 0..8 {
+            let a = k as f32 * std::f32::consts::FRAC_PI_4;
+            let mut b = Body::new(from, 15.0, 42.0);
+            b.settle(model);
+            let settled = b.pos;
+            let mut falls = 0;
+            for _ in 0..180 {
+                b.tick(model, &m, Vec3::new(a.cos(), a.sin(), 0.0), false, 1.0 / 60.0);
+                falls += (b.mode == Mode::Falling) as u32;
+            }
+            println!(
+                "walk {:3}° for 3 s from {:?}: ended at {:6.0} {:6.0} {:6.1}, moved {:5.0}, {falls} ticks falling",
+                k * 45,
+                settled.round(),
+                b.pos.x,
+                b.pos.y,
+                b.pos.z,
+                (b.pos - settled).length()
+            );
+        }
+    }
+    println!("{traces} traces in {:.2} ms", t.elapsed().as_secs_f64() * 1000.0);
+    Ok(ExitCode::SUCCESS)
 }
 
 fn cmd_actors(data: &Path, map: &str, filter: Option<&str>) -> Result<ExitCode> {
