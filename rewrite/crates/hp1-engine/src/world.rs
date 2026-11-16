@@ -241,17 +241,42 @@ impl World {
     }
 
     /// Adds an object as if it had been placed with these settings, behaviour included.
-    pub fn spawn_actor(&mut self, actor: Actor) -> ActorId {
+    ///
+    /// Like the original engine, a solid character can't be spawned into another character or
+    /// into a brush object (HP1's pawns refuse to overlap any other pawn): then nothing is
+    /// spawned and None comes back.
+    pub fn spawn_actor(&mut self, actor: Actor) -> Option<ActorId> {
         let e = {
             let p = ActorProps::new(&actor, &self.classes);
             let mut e = Entity::from_props(&actor.name, &actor.class, &p, None);
+            let solid = p.bool("bBlockActors") || p.bool("bBlockPlayers");
+            if solid
+                && !p.bool("bIsPlayer")
+                && self.classes.is_a(&actor.class, "Engine.Pawn")
+                && self.occupied(&e)
+            {
+                return None;
+            }
             e.behaviour = crate::behaviours::make(&actor.class, &p, &self.classes);
             e
         };
         let id = self.spawn(e);
         self.extra.insert(id, actor);
         self.spawned.push(id);
-        id
+        Some(id)
+    }
+
+    /// Whether a character placed as `e` would overlap a solid character or a brush object.
+    fn occupied(&self, e: &Entity) -> bool {
+        let extent = Vec3::new(e.radius, e.radius, e.height);
+        let pawn_in_way = self.actors.iter().flatten().any(|o| {
+            let pawn = o.is_pawn || self.classes.is_a(&o.class, "Engine.Pawn");
+            pawn && (o.block_players || o.is_player)
+                && (o.pos - e.pos).truncate().length() < o.radius + e.radius
+                && (o.pos.z - e.pos.z).abs() < o.height + e.height
+        });
+        pawn_in_way
+            || self.collider(None).brushes().any(|(id, _, _)| self.brush_collider(id).overlaps(e.pos, extent))
     }
 
     /// An object's settings: placed in the level or spawned later.
@@ -410,6 +435,61 @@ pub struct WorldCollider<'a> {
     only: Option<ActorId>,
 }
 
+/// A walker swept against an upright cylinder (how the original collides with characters and
+/// other round objects). The walker counts as a cylinder of its half-width too, so the normal
+/// points away from the cylinder's axis and walkers slide round each other.
+fn sweep_cylinder(
+    start: Vec3,
+    end: Vec3,
+    extent: Vec3,
+    center: Vec3,
+    radius: f32,
+    height: f32,
+) -> Option<(f32, Vec3)> {
+    let d = end - start;
+    let r = radius + extent.x;
+    let h = height + extent.z;
+    let rel = start - center;
+    // Entry and exit times of the side wall (infinite cylinder) and of the top/bottom slab.
+    let (a, b, c) =
+        (d.x * d.x + d.y * d.y, 2.0 * (rel.x * d.x + rel.y * d.y), rel.x * rel.x + rel.y * rel.y - r * r);
+    let (side_in, side_out) = if a < 1e-9 {
+        if c > 0.0 {
+            return None;
+        }
+        (f32::NEG_INFINITY, f32::INFINITY)
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            return None;
+        }
+        let q = disc.sqrt();
+        ((-b - q) / (2.0 * a), (-b + q) / (2.0 * a))
+    };
+    let (slab_in, slab_out) = if d.z.abs() < 1e-9 {
+        if rel.z.abs() > h {
+            return None;
+        }
+        (f32::NEG_INFINITY, f32::INFINITY)
+    } else {
+        let (t0, t1) = ((-h - rel.z) / d.z, (h - rel.z) / d.z);
+        (t0.min(t1), t0.max(t1))
+    };
+    let t_in = side_in.max(slab_in);
+    let t_out = side_out.min(slab_out);
+    // Starting inside doesn't block, so characters can walk out of each other.
+    if t_in > t_out || !(0.0..=1.0).contains(&t_in) {
+        return None;
+    }
+    let normal = if slab_in > side_in {
+        Vec3::Z * -d.z.signum()
+    } else {
+        let p = rel + d * t_in;
+        Vec3::new(p.x, p.y, 0.0).normalize_or_zero()
+    };
+    Some(((t_in - 0.1 / d.length().max(1e-3)).max(0.0), normal))
+}
+
 /// A box swept against an axis-aligned box: entry time and face normal.
 fn sweep_aabb(start: Vec3, end: Vec3, extent: Vec3, center: Vec3, half: Vec3) -> Option<(f32, Vec3)> {
     let d = end - start;
@@ -479,7 +559,12 @@ impl Collider for WorldCollider<'_> {
                 if Some(i) == self.ignore || !e.block_players || !e.collide_actors || e.brush.is_some() {
                     continue;
                 }
-                if let Some((time, normal)) = sweep_aabb(start, end, extent, e.pos, e.blocking_half()) {
+                let hit = if e.width.is_some() {
+                    sweep_aabb(start, end, extent, e.pos, e.blocking_half())
+                } else {
+                    sweep_cylinder(start, end, extent, e.pos, e.radius, e.height)
+                };
+                if let Some((time, normal)) = hit {
                     keep(Hit { time, normal, node: 0, actor: Some(i) });
                 }
             }
@@ -498,5 +583,50 @@ impl Collider for WorldCollider<'_> {
                 (Mat3::from_cols(inv.x_axis.abs(), inv.y_axis.abs(), inv.z_axis.abs())) * extent;
             overlaps_model(model, inv * (pos - t), local_extent)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walkers_hit_cylinders_on_their_round_side() {
+        let extent = Vec3::new(22.0, 22.0, 42.0);
+        let (start, end) = (Vec3::ZERO, Vec3::new(200.0, 0.0, 0.0));
+        // Head on: stops 44 units short of the centre, pushed straight back.
+        let (t, n) = sweep_cylinder(start, end, extent, Vec3::new(100.0, 0.0, 0.0), 22.0, 42.0).unwrap();
+        assert!((start.lerp(end, t).x - 56.0).abs() < 0.5, "{t}");
+        assert!((n - Vec3::NEG_X).length() < 1e-4);
+        // Off to one side: the normal leans sideways, so sliding goes round.
+        let (_, n) = sweep_cylinder(start, end, extent, Vec3::new(100.0, 20.0, 0.0), 22.0, 42.0).unwrap();
+        assert!(n.x < 0.0 && n.y < -0.3, "{n}");
+        // Passing by, or starting inside: no hit.
+        assert!(sweep_cylinder(start, end, extent, Vec3::new(100.0, 50.0, 0.0), 22.0, 42.0).is_none());
+        assert!(sweep_cylinder(start, end, extent, Vec3::new(10.0, 0.0, 0.0), 22.0, 42.0).is_none());
+    }
+
+    #[test]
+    fn walkers_slide_round_a_standing_character() {
+        use crate::walk::{Body, Movement};
+        let level = LevelFile {
+            name: "Test".into(),
+            actors: Vec::new(),
+            model: crate::collision::tests::floor(),
+            brushes: Default::default(),
+            reach_specs: Vec::new(),
+        };
+        let mut w = World::new(level, ClassTable::default());
+        let mut other = Entity::pawn("Other", "Test.Other", Vec3::new(150.0, 8.0, 42.0), 22.0, 40.0, false);
+        other.block_players = true;
+        w.spawn(other);
+        let mut body = Body::new(Vec3::new(0.0, 0.0, 42.5), 22.0, 42.0);
+        let m = Movement::default();
+        let goal = Vec3::new(300.0, 0.0, 42.0);
+        for _ in 0..240 {
+            let wish = (goal - body.pos).truncate().normalize_or_zero().extend(0.0);
+            body.tick(&w.collider(None), &m, wish, false, 1.0 / 60.0);
+        }
+        assert!(body.pos.x > 250.0, "got round: {:?}", body.pos);
     }
 }

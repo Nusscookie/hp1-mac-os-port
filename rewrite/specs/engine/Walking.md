@@ -24,13 +24,15 @@ walks on a floor or falls through the air.
   direction still steers it, scaled by `AirControl`. Hitting a flat enough floor lands it (back to
   walking); hitting a wall or a steep slope slides along it.
 
-Characters walking a route (patrols, cutscenes) don't accelerate: their speed is set directly
-each tick, and the rest (steps, slopes, walls, gravity) works the same.
+Characters on a route walk like this too (speeding up towards the next spot). Only HP1's
+straight and curved route walks set the speed directly each tick; steps, slopes, walls and
+gravity work the same for them.
 
-Solid objects (`bBlockPlayers`, e.g. Engine.BlockAll) stop walkers too. A cylinder blocks as the
-box around it; a box-shaped one (HP1 `CollideType` 2) is `CollisionRadius` long and
-`CollisionWidth` wide along its facing. The maps turn these only by quarter turns, so the
-upright box around it is exact. (Tut1 uses a thin one along the main staircase.)
+Solid objects (`bBlockPlayers`, e.g. Engine.BlockAll and characters) stop walkers too. Most are
+upright cylinders, so a walker hitting one off-centre slides round it. A box-shaped one (HP1
+`CollideType` 2) is `CollisionRadius` long and `CollisionWidth` wide along its facing, as in
+SurrealEngine; the maps turn these only by quarter turns, so the upright box around it is exact.
+(Tut1 uses a thin one along the main staircase.)
 
 ## Reacts to
 - Spawning inside the level geometry: it is moved to the nearest free spot (first upwards, then

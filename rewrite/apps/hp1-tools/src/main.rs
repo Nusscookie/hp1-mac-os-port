@@ -11,6 +11,7 @@
 //!   hp1-tools fire <converted> <texture> <out.png>       a fire texture after 1, 2 and 4 seconds
 //!   hp1-tools check-audio <converted>                   decode every sound and music file
 //!   hp1-tools walk <converted> <map> x,y,z x,y,z [radius] a character walking from A to B
+//!   hp1-tools patrol <converted> <map>                  patrol routes as the level links them
 
 mod preview;
 
@@ -34,6 +35,7 @@ const USAGE: &str = "usage:
   hp1-tools check-audio <converted folder>
   hp1-tools collide <converted folder> <map>
   hp1-tools walk <converted folder> <map> <from x,y,z> <to x,y,z> [radius]
+  hp1-tools patrol <converted folder> <map>
   hp1-tools sequences <converted folder> <anim file, e.g. anims/HarryPotter/skharryAnims.anim>";
 
 fn main() -> ExitCode {
@@ -66,6 +68,7 @@ fn main() -> ExitCode {
         }
         Some("check-audio") if args.len() == 2 => cmd_check_audio(Path::new(&args[1])),
         Some("collide") if args.len() == 3 => cmd_collide(Path::new(&args[1]), &args[2]),
+        Some("patrol") if args.len() == 3 => cmd_patrol(Path::new(&args[1]), &args[2]),
         Some("walk") if (5..=6).contains(&args.len()) => cmd_walk(
             Path::new(&args[1]),
             &args[2],
@@ -273,6 +276,39 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
 
 /// Drops a Harry-sized box from every player start and every 50th placed object, traces lines
 /// outwards from the first start and walks Harry from there: a quick check of collision on a map.
+/// Every patrol point with where it leads, as linked when the level starts.
+fn cmd_patrol(data: &Path, map: &str) -> Result<ExitCode> {
+    let level: hp1_data::level::LevelFile =
+        hp1_data::mesh::load_binary(&data.join("levels").join(format!("{map}.level")))?;
+    let classes: hp1_data::ClassTable = serde_json::from_slice(&std::fs::read(data.join("classes.json"))?)?;
+    let world = hp1_engine::world::World::new(level, classes);
+    let net = hp1_engine::patrol::PatrolNet::build(&world);
+    let name = |i: Option<usize>| i.map_or("-".to_owned(), |i| net.points[i].name.clone());
+    for p in &net.points {
+        let mut notes = Vec::new();
+        if p.pause > 0.0 {
+            notes.push(format!("pause {:.1}", p.pause));
+        }
+        if !p.event.is_empty() {
+            notes.push(format!("event {}", p.event));
+        }
+        if p.destroy {
+            notes.push("removes".to_owned());
+        }
+        println!(
+            "{:16} {:6.0} {:6.0} {:6.0}  next {:16} prev {:16} {}",
+            p.name,
+            p.pos.x,
+            p.pos.y,
+            p.pos.z,
+            name(p.next),
+            name(p.prev),
+            notes.join(", ")
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 fn parse_point(s: &str) -> Result<glam::Vec3> {
     let n: Vec<f32> = s.split(',').map(|v| v.trim().parse()).collect::<Result<_, _>>()?;
     let [x, y, z] = n[..] else { bail!("want x,y,z, got {s}") };
