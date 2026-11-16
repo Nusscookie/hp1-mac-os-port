@@ -209,3 +209,46 @@ pub fn light_maps(data: &Path, map: &str, out: &Path) -> Result<()> {
     hp1_convert::write_png(out, width, height, &rgba).map_err(|e| anyhow!("{e}"))?;
     Ok(())
 }
+
+/// Runs a fire texture and saves three moments side by side (4× scaled).
+pub fn fire(data: &Path, texture: &str, out: &Path) -> Result<()> {
+    let textures: Vec<TextureInfo> = read_json_dir(&data.join("textures"))?;
+    let t = textures
+        .iter()
+        .find(|t| t.path.eq_ignore_ascii_case(texture))
+        .ok_or_else(|| anyhow!("texture {texture} not found"))?;
+    let palette: Vec<[u8; 4]> = match &t.palette_file {
+        Some(f) => load_png(&data.join(f))?.rgba.as_chunks::<4>().0.to_vec(),
+        None => bail!("{texture} has no palette (is it a fire texture?)"),
+    };
+    let int = |n: &str, d: i64| t.props.get(n).and_then(hp1_data::DataValue::as_i64).unwrap_or(d);
+    let mut sim = hp1_engine::procedural::Fire::new(
+        t.width,
+        t.height,
+        &t.sparks,
+        int("RenderHeat", 255).clamp(0, 255) as u8,
+        int("bRising", 0) != 0,
+        int("SparksLimit", 1024),
+        1,
+    );
+    let (w, h, scale) = (t.width as usize, t.height as usize, 4usize);
+    let mut img = vec![0u8; w * scale * 3 * h * scale * 4];
+    let mut steps = 0;
+    for (k, seconds) in [1, 2, 4].into_iter().enumerate() {
+        while steps < seconds * 25 {
+            sim.step();
+            steps += 1;
+        }
+        let rgba = sim.rgba(&palette, false);
+        for y in 0..h * scale {
+            for x in 0..w * scale {
+                let s = ((y / scale) * w + x / scale) * 4;
+                let d = (y * w * scale * 3 + k * w * scale + x) * 4;
+                img[d..d + 4].copy_from_slice(&rgba[s..s + 4]);
+            }
+        }
+    }
+    hp1_convert::write_png(out, (w * scale * 3) as u32, (h * scale) as u32, &img)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(())
+}

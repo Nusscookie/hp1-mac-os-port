@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use hp1_data::{DataValue, TextureInfo};
+use hp1_data::{DataValue, TextureInfo, TextureKind};
 use hp1_render::Image;
 
 pub struct Textures {
@@ -64,7 +64,15 @@ impl Textures {
         if let Some(&i) = self.index.get(&key) {
             return i;
         }
-        let i = match self.info.get(&key).map(|t| load_png(&self.data.join(&t.file))) {
+        // Water-type textures are not simulated yet; they show their source picture.
+        let file = self.info.get(&key).map(|t| {
+            let source = (t.kind == TextureKind::Water)
+                .then(|| t.props.get("SourceTexture").and_then(DataValue::as_str))
+                .flatten()
+                .and_then(|s| self.info.get(&s.to_ascii_lowercase()));
+            source.unwrap_or(t).file.clone()
+        });
+        let i = match file.map(|f| load_png(&self.data.join(f))) {
             Some(Ok(img)) => {
                 self.images.push(img);
                 self.paths.push(key.clone());
@@ -118,6 +126,84 @@ impl Textures {
             if frames.len() > 1 {
                 out.push(Animation { base: i as u32, frames, fps });
             }
+        }
+        out
+    }
+}
+
+/// A fire texture being simulated.
+pub struct FireTexture {
+    pub index: u32,
+    pub path: String,
+    sim: hp1_engine::procedural::Fire,
+    palette: Vec<[u8; 4]>,
+    masked: bool,
+    fps: f32,
+    steps: u64,
+}
+
+impl FireTexture {
+    /// Advances to `time` seconds and returns the new image if it changed.
+    pub fn update(&mut self, time: f32) -> Option<Image> {
+        let due = (time * self.fps) as u64;
+        if due <= self.steps {
+            return None;
+        }
+        for _ in 0..(due - self.steps).min(10) {
+            self.sim.step();
+        }
+        self.steps = due;
+        Some(self.image())
+    }
+
+    pub fn image(&self) -> Image {
+        Image {
+            width: self.sim.width as u32,
+            height: self.sim.height as u32,
+            rgba: self.sim.rgba(&self.palette, self.masked),
+        }
+    }
+}
+
+impl Textures {
+    /// Sets up the simulation of every loaded fire texture.
+    pub fn fires(&self) -> Vec<FireTexture> {
+        let mut out = Vec::new();
+        for (i, path) in self.paths.iter().enumerate().skip(1) {
+            let Some(t) = self.info(path) else { continue };
+            if t.kind != TextureKind::Fire {
+                continue;
+            }
+            let palette: Vec<[u8; 4]> = t
+                .palette_file
+                .as_ref()
+                .and_then(|f| load_png(&self.data.join(f)).ok())
+                .map(|p| p.rgba.as_chunks::<4>().0.to_vec())
+                .unwrap_or_default();
+            let prop = |n: &str| t.props.get(n);
+            let mut sim = hp1_engine::procedural::Fire::new(
+                t.width,
+                t.height,
+                &t.sparks,
+                prop("RenderHeat").and_then(DataValue::as_i64).unwrap_or(255).clamp(0, 255) as u8,
+                prop("bRising").and_then(DataValue::as_bool).unwrap_or(false),
+                prop("SparksLimit").and_then(DataValue::as_i64).unwrap_or(1024),
+                0x9E37_79B9 ^ (i as u32).wrapping_mul(2_654_435_761),
+            );
+            // Fires run for a while before they are first shown.
+            for _ in 0..prop("PrimeCount").and_then(DataValue::as_i64).unwrap_or(0).clamp(0, 1000) {
+                sim.step();
+            }
+            let fps = prop("MaxFrameRate").and_then(DataValue::as_f32).filter(|&f| f > 0.0).unwrap_or(25.0);
+            out.push(FireTexture {
+                index: i as u32,
+                path: path.clone(),
+                sim,
+                palette,
+                masked: t.masked,
+                fps,
+                steps: 0,
+            });
         }
         out
     }

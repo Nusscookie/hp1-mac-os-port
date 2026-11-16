@@ -8,6 +8,7 @@
 //!   hp1-tools render-mesh <converted> <mesh> <out.png> [sequence] [0..1]   software preview
 //!   hp1-tools light-maps <converted> <map> <out.png>   a level's light maps side by side
 //!   hp1-tools actors <converted> <map> [filter]          placed objects with class and position
+//!   hp1-tools fire <converted> <texture> <out.png>       a fire texture after 1, 2 and 4 seconds
 
 mod preview;
 
@@ -26,7 +27,8 @@ const USAGE: &str = "usage:
   hp1-tools convert <game folder> <output folder>
   hp1-tools render-mesh <converted folder> <mesh> <out.png> [sequence] [time 0..1]
   hp1-tools light-maps <converted folder> <map> <out.png>
-  hp1-tools actors <converted folder> <map> [name or class filter]";
+  hp1-tools actors <converted folder> <map> [name or class filter]
+  hp1-tools fire <converted folder> <texture> <out.png>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,6 +51,9 @@ fn main() -> ExitCode {
         }
         Some("actors") if (3..=4).contains(&args.len()) => {
             cmd_actors(Path::new(&args[1]), &args[2], args.get(3).map(String::as_str))
+        }
+        Some("fire") if args.len() == 4 => {
+            preview::fire(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
         }
         _ => {
             eprintln!("{USAGE}");

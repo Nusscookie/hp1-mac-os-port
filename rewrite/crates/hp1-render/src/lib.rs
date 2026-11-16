@@ -126,7 +126,20 @@ pub struct Scene {
     /// Which uploaded texture to draw for each texture index (for animated textures).
     pub texture_map: Vec<u32>,
     textures: Vec<wgpu::BindGroup>,
+    texture_handles: Vec<wgpu::Texture>,
     lightmaps: Vec<wgpu::BindGroup>,
+}
+
+impl Scene {
+    /// Replaces the pixels of texture `index` (same size as uploaded), e.g. a fire texture.
+    pub fn update_texture(&self, gpu: &Gpu, index: u32, img: &Image) {
+        if let Some(t) = self.texture_handles.get(index as usize)
+            && t.width() == img.width
+            && t.height() == img.height
+        {
+            write_chain(gpu, t, &mip_chain(img));
+        }
+    }
 }
 
 impl Geometry {
@@ -212,7 +225,7 @@ fn mip_chain(img: &Image) -> Vec<Image> {
     chain
 }
 
-fn upload_image(gpu: &Gpu, img: &Image, mips: bool, label: &str) -> wgpu::TextureView {
+fn upload_image(gpu: &Gpu, img: &Image, mips: bool, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
     let chain = if mips { mip_chain(img) } else { vec![img.clone()] };
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -224,10 +237,16 @@ fn upload_image(gpu: &Gpu, img: &Image, mips: bool, label: &str) -> wgpu::Textur
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    write_chain(gpu, &texture, &chain);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+fn write_chain(gpu: &Gpu, texture: &wgpu::Texture, chain: &[Image]) {
     for (level, m) in chain.iter().enumerate() {
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &texture,
+                texture,
                 mip_level: level as u32,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -237,7 +256,6 @@ fn upload_image(gpu: &Gpu, img: &Image, mips: bool, label: &str) -> wgpu::Textur
             wgpu::Extent3d { width: m.width, height: m.height, depth_or_array_layers: 1 },
         );
     }
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 impl WorldRenderer {
@@ -399,23 +417,28 @@ impl WorldRenderer {
 
     pub fn upload(&self, gpu: &Gpu, desc: &SceneDesc) -> Scene {
         let white = Image { width: 1, height: 1, rgba: vec![255; 4] };
+        let mut texture_handles = Vec::new();
         let textures: Vec<wgpu::BindGroup> = desc
             .textures
             .iter()
             .chain(desc.textures.is_empty().then_some(&white))
-            .map(|img| self.image_group(gpu, &upload_image(gpu, img, true, "texture"), &self.texture_sampler))
+            .map(|img| {
+                let (texture, view) = upload_image(gpu, img, true, "texture");
+                texture_handles.push(texture);
+                self.image_group(gpu, &view, &self.texture_sampler)
+            })
             .collect();
         let lightmaps = desc
             .lightmaps
             .iter()
             .chain(desc.lightmaps.is_empty().then_some(&white))
             .map(|img| {
-                self.image_group(gpu, &upload_image(gpu, img, false, "lightmap"), &self.lightmap_sampler)
+                self.image_group(gpu, &upload_image(gpu, img, false, "lightmap").1, &self.lightmap_sampler)
             })
             .collect();
         let world = Geometry::new(gpu, desc.vertices, desc.indices, desc.batches.clone());
         let texture_map = (0..textures.len() as u32).collect();
-        Scene { geometry: vec![world], texture_map, textures, lightmaps }
+        Scene { geometry: vec![world], texture_map, textures, texture_handles, lightmaps }
     }
 
     /// Records drawing `scene` into `color`/`depth`, clearing both first. With `sky_view`, the

@@ -97,6 +97,7 @@ struct Loaded {
     lightmaps: Vec<Image>,
     actors: actors::Actors,
     animations: Vec<textures::Animation>,
+    fires: Vec<textures::FireTexture>,
     start: Camera,
     /// Where the sky is seen from (the sky zone's position), if the map has one.
     sky_origin: Option<Vec3>,
@@ -183,6 +184,18 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
 
     let actors = actors::Actors::load(data, &level, &classes, &mut textures)?;
     let animations = textures.animations();
+    let mut fires = textures.fires();
+    if !fires.is_empty() {
+        let names: Vec<&str> = fires.iter().map(|f| f.path.as_str()).collect();
+        println!("fire textures: {}", names.join(", "));
+    }
+    // Show the primed fires from the start (also in screenshots).
+    for f in &mut fires {
+        let img = f.image();
+        if let Some(slot) = textures.images.get_mut(f.index as usize) {
+            *slot = img;
+        }
+    }
     let rebuild = Instant::now();
     actors.build_moving(1.0);
     println!("{} moving objects, rebuilt per frame in {:.2?}", actors.moving_count(), rebuild.elapsed());
@@ -206,6 +219,7 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         lightmaps,
         actors,
         animations,
+        fires,
         start,
         sky_origin,
     })
@@ -230,13 +244,18 @@ fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
     scene
 }
 
-fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &Loaded, time: f32) {
+fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &mut Loaded, time: f32) {
     let moving = l.actors.build_moving(time);
     scene.geometry[2].update(gpu, &moving.vertices, &moving.indices, moving.batches);
     for a in &l.animations {
         let frame = (time * a.fps) as usize % a.frames.len();
         if let Some(slot) = scene.texture_map.get_mut(a.base as usize) {
             *slot = a.frames[frame];
+        }
+    }
+    for f in &mut l.fires {
+        if let Some(img) = f.update(time) {
+            scene.update_texture(gpu, f.index, &img);
         }
     }
 }
@@ -248,7 +267,7 @@ fn main() -> Result<()> {
     if let Some([x, y, z, yaw, pitch]) = args.camera {
         camera = Camera { pos: Vec3::new(x, y, z), yaw: yaw.to_radians(), pitch: pitch.to_radians() };
     }
-    let loaded = Loaded { start: Camera { pos: Vec3::ZERO, yaw: 0.0, pitch: 0.0 }, ..loaded };
+    let mut loaded = Loaded { start: Camera { pos: Vec3::ZERO, yaw: 0.0, pitch: 0.0 }, ..loaded };
 
     if let Some(out) = &args.shot {
         let gpu = Gpu::new(hp1_render::create_instance(), None).map_err(|e| anyhow!(e))?;
@@ -359,7 +378,7 @@ fn main() -> Result<()> {
                 continue;
             }
         };
-        update_moving(&gpu, &mut scene, &loaded, started.elapsed().as_secs_f32());
+        update_moving(&gpu, &mut scene, &mut loaded, started.elapsed().as_secs_f32());
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         let sky = loaded.sky_origin.map(|o| camera.from(o).view_proj(width, height));

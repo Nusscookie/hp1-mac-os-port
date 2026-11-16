@@ -191,7 +191,7 @@ pub enum TextureKind {
     Other,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Spark {
     pub kind: u8,
     pub heat: u8,
