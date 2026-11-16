@@ -31,7 +31,8 @@ const USAGE: &str = "usage:
   hp1-tools actors <converted folder> <map> [name or class filter] [--props]
   hp1-tools fire <converted folder> <texture> <out.png>
   hp1-tools check-audio <converted folder>
-  hp1-tools collide <converted folder> <map>";
+  hp1-tools collide <converted folder> <map>
+  hp1-tools sequences <converted folder> <anim file, e.g. anims/HarryPotter/skharryAnims.anim>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -63,6 +64,7 @@ fn main() -> ExitCode {
         }
         Some("check-audio") if args.len() == 2 => cmd_check_audio(Path::new(&args[1])),
         Some("collide") if args.len() == 3 => cmd_collide(Path::new(&args[1]), &args[2]),
+        Some("sequences") if args.len() == 3 => cmd_sequences(&Path::new(&args[1]).join(&args[2])),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -353,6 +355,17 @@ fn cmd_collide(data: &Path, map: &str) -> Result<ExitCode> {
         );
     }
     println!("{traces} traces in {:.2} ms", t.elapsed().as_secs_f64() * 1000.0);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn cmd_sequences(file: &Path) -> Result<ExitCode> {
+    let anim: hp1_data::mesh::AnimFile = hp1_data::mesh::load_binary(file)?;
+    for s in &anim.sequences {
+        println!(
+            "{:24} {:4} frames {:5.1} fps {:6.2} s",
+            s.info.name, s.info.frames, s.info.rate, s.duration
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 

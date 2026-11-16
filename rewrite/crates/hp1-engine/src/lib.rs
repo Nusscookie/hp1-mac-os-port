@@ -4,6 +4,7 @@
 pub mod anim;
 pub mod behaviours;
 pub mod bsp;
+pub mod camera;
 pub mod collision;
 pub mod level_mesh;
 pub mod lighting;

@@ -47,6 +47,19 @@ pub struct Actors {
     moving: Vec<Instance>,
     pub count: usize,
     pub skipped: usize,
+    /// The player's character, posed by the program every frame.
+    player: Option<Instance>,
+    /// The player class's PrePivot and DrawScale.
+    player_fit: (Vec3, f32),
+    all_lights: Vec<LightSource>,
+}
+
+/// What loading an object's mesh needs; kept so the player can be loaded the same way.
+struct Loader<'a> {
+    data: &'a Path,
+    index: HashMap<String, MeshIndexEntry>,
+    meshes: HashMap<String, Option<Arc<MeshFile>>>,
+    anims: HashMap<String, Option<Arc<AnimFile>>>,
 }
 
 impl Actors {
@@ -82,123 +95,27 @@ impl Actors {
         classes: &ClassTable,
         textures: &mut Textures,
     ) -> Result<Self> {
-        let index = read_index(data)?;
+        let mut loader =
+            Loader { data, index: read_index(data)?, meshes: HashMap::new(), anims: HashMap::new() };
         let all_lights = level_lights(level, classes);
-        let mut meshes: HashMap<String, Option<Arc<MeshFile>>> = HashMap::new();
-        let mut anims: HashMap<String, Option<Arc<AnimFile>>> = HashMap::new();
-        let mut out = Actors { still: Vec::new(), moving: Vec::new(), count: 0, skipped: 0 };
-
+        let mut out = Actors {
+            still: Vec::new(),
+            moving: Vec::new(),
+            count: 0,
+            skipped: 0,
+            player: None,
+            player_fit: (Vec3::ZERO, 1.0),
+            all_lights: Vec::new(),
+        };
         for (n, actor) in level.actors.iter().enumerate() {
             let Some(actor) = actor else { continue };
             let p = ActorProps::new(actor, classes);
-            if p.int("DrawType", 1) != DRAW_MESH || p.bool("bHidden") {
+            if p.int("DrawType", 1) != DRAW_MESH || p.bool("bHidden") || p.get("Mesh").is_none() {
                 continue;
             }
-            let Some(mesh_path) = p.get("Mesh").and_then(|v| v.as_str()).map(str::to_owned) else { continue };
-            let entry = index.get(&mesh_path.to_ascii_lowercase());
-            let mesh = meshes
-                .entry(mesh_path.to_ascii_lowercase())
-                .or_insert_with(|| {
-                    entry.and_then(|e| load_binary::<MeshFile>(&data.join(&e.file)).ok()).map(Arc::new)
-                })
-                .clone();
-            let Some(mesh) = mesh else {
+            let Some(inst) = loader.instance(&p, level, classes, textures, &all_lights, n) else {
                 out.skipped += 1;
                 continue;
-            };
-
-            let loc = Vec3::from(p.vec3("Location"));
-            let [pitch, yaw, roll] = p.rotator("Rotation");
-            let scale = p.f32("DrawScale", 1.0);
-            let to_world = Mat4::from_translation(loc + Vec3::from(p.vec3("PrePivot")))
-                * rotator_matrix(pitch, yaw, roll)
-                * Mat4::from_scale(Vec3::splat(scale))
-                * mesh_to_object(&mesh.transform);
-
-            // Textures: the object's own per-slot skins, then the mesh's, then the object's skin.
-            let style = p.byte("Style", 1);
-            let skin = p.get("Skin").and_then(|v| v.as_str()).map(str::to_owned);
-            let materials = mesh
-                .materials
-                .iter()
-                .map(|m| {
-                    let slot = m.slot.max(0) as usize;
-                    let key = if slot == 0 { "MultiSkins".to_owned() } else { format!("MultiSkins[{slot}]") };
-                    let multi = p.get(&key).and_then(|v| v.as_str()).map(str::to_owned);
-                    let path = multi.or_else(|| m.texture.clone()).or_else(|| skin.clone());
-                    let tex = path.as_deref().map_or(0, |t| textures.get(t));
-                    let masked = path.as_deref().and_then(|t| textures.info(t)).is_some_and(|t| t.masked);
-                    let f = m.poly_flags;
-                    let blend = if style == 3 || f & poly_flags::TRANSLUCENT != 0 {
-                        Blend::Translucent
-                    } else if style == 4 || f & poly_flags::MODULATED != 0 {
-                        Blend::Modulated
-                    } else if style == 2 || masked || f & poly_flags::MASKED != 0 {
-                        Blend::Masked
-                    } else {
-                        Blend::Opaque
-                    };
-                    (tex, blend)
-                })
-                .collect();
-
-            // Lights that can reach the object.
-            let size = (Vec3::from(mesh.bounds_max) - Vec3::from(mesh.bounds_min)).length() * scale;
-            let lights =
-                all_lights.iter().filter(|l| l.location.distance(loc) < l.radius + size).copied().collect();
-            let ambient = zone_ambient(level, classes, zone_at(&level.model, loc));
-
-            let seq_name = p.get("AnimSequence").and_then(|v| v.as_str()).map(str::to_owned);
-            let motion = match &mesh.body {
-                MeshBody::Skeletal { bones, .. } => {
-                    let anim = entry.and_then(|e| e.animation_file.clone()).and_then(|f| {
-                        anims
-                            .entry(f.clone())
-                            .or_insert_with(|| load_binary(&data.join(&f)).ok().map(Arc::new))
-                            .clone()
-                    });
-                    match anim {
-                        Some(anim) => {
-                            // The map's sequence, else a standing-still one (behaviour code will
-                            // choose animations later).
-                            let find = |want: &str| {
-                                anim.sequences.iter().position(|s| s.info.name.eq_ignore_ascii_case(want))
-                            };
-                            let seq = seq_name.as_deref().and_then(find).or_else(|| {
-                                anim.sequences.iter().position(|s| {
-                                    let n = s.info.name.to_ascii_lowercase();
-                                    n.contains("breath") || n.contains("idle")
-                                })
-                            });
-                            match seq {
-                                Some(seq) => Motion::Skeletal { links: bone_links(bones, &anim), anim, seq },
-                                None => Motion::Still,
-                            }
-                        }
-                        None => Motion::Still,
-                    }
-                }
-                MeshBody::Vertex { sequences, .. } => {
-                    let seq =
-                        seq_name.and_then(|n| sequences.iter().find(|s| s.name.eq_ignore_ascii_case(&n)));
-                    match seq {
-                        Some(s) if s.frames > 1 => {
-                            Motion::Frames { start: s.start_frame, frames: s.frames, rate: s.rate.max(1.0) }
-                        }
-                        Some(s) => Motion::Frames { start: s.start_frame, frames: 1, rate: 1.0 },
-                        None => Motion::Still,
-                    }
-                }
-            };
-            let inst = Instance {
-                mesh,
-                to_world,
-                materials,
-                lights,
-                ambient,
-                unlit: p.bool("bUnlit"),
-                phase: (n as f32 * 0.37) % 1.0,
-                motion,
             };
             out.count += 1;
             match inst.motion {
@@ -206,7 +123,66 @@ impl Actors {
                 _ => out.still.push(inst),
             }
         }
+        out.all_lights = all_lights;
         Ok(out)
+    }
+
+    /// Loads the player's character (an object of `class` placed by code).
+    pub fn load_player(
+        &mut self,
+        data: &Path,
+        level: &LevelFile,
+        classes: &ClassTable,
+        textures: &mut Textures,
+        class: &str,
+    ) -> Result<bool> {
+        let mut loader =
+            Loader { data, index: read_index(data)?, meshes: HashMap::new(), anims: HashMap::new() };
+        let actor = hp1_data::level::Actor {
+            name: "Player".into(),
+            class: class.into(),
+            props: Default::default(),
+            brush: None,
+        };
+        let p = ActorProps::new(&actor, classes);
+        self.player_fit = (Vec3::from(p.vec3("PrePivot")), p.f32("DrawScale", 1.0));
+        self.player = loader.instance(&p, level, classes, textures, &[], 0).map(|mut i| {
+            i.phase = 0.0;
+            i
+        });
+        Ok(self.player.is_some())
+    }
+
+    /// Places and poses the player: collision centre `pos`, facing `yaw` radians, playing the
+    /// sequence `anim` at `time` seconds into it.
+    pub fn pose_player(
+        &mut self,
+        level: &LevelFile,
+        classes: &ClassTable,
+        pos: Vec3,
+        yaw: f32,
+        anim: &str,
+        time: f32,
+    ) {
+        let Some(p) = &mut self.player else { return };
+        let (pivot, scale) = self.player_fit;
+        p.to_world = Mat4::from_translation(pos + pivot)
+            * rotator_matrix(0, (yaw / hp1_engine::units::ROT_TO_RAD) as i32, 0)
+            * Mat4::from_scale(Vec3::splat(scale))
+            * mesh_to_object(&p.mesh.transform);
+        if let Motion::Skeletal { anim: file, seq, .. } = &mut p.motion
+            && let Some(i) = file.sequences.iter().position(|s| s.info.name.eq_ignore_ascii_case(anim))
+        {
+            *seq = i;
+        }
+        p.phase = time;
+        p.lights =
+            self.all_lights.iter().filter(|l| l.location.distance(pos) < l.radius + 100.0).copied().collect();
+        p.ambient = zone_ambient(level, classes, zone_at(&level.model, pos));
+    }
+
+    pub fn build_player(&self) -> Built {
+        self.player.as_ref().map_or_else(Built::default, |p| build(std::slice::from_ref(p), 0.0))
     }
 
     pub fn build_still(&self) -> Built {
@@ -215,6 +191,124 @@ impl Actors {
 
     pub fn build_moving(&self, time: f32) -> Built {
         build(&self.moving, time)
+    }
+}
+
+impl Loader<'_> {
+    fn instance(
+        &mut self,
+        p: &ActorProps,
+        level: &LevelFile,
+        classes: &ClassTable,
+        textures: &mut Textures,
+        all_lights: &[LightSource],
+        n: usize,
+    ) -> Option<Instance> {
+        let mesh_path = p.get("Mesh").and_then(|v| v.as_str()).map(str::to_owned)?;
+        let entry = self.index.get(&mesh_path.to_ascii_lowercase()).cloned();
+        let entry = entry.as_ref();
+        let data = self.data;
+        let mesh = self
+            .meshes
+            .entry(mesh_path.to_ascii_lowercase())
+            .or_insert_with(|| {
+                entry.and_then(|e| load_binary::<MeshFile>(&data.join(&e.file)).ok()).map(Arc::new)
+            })
+            .clone();
+        let mesh = mesh?;
+
+        let loc = Vec3::from(p.vec3("Location"));
+        let [pitch, yaw, roll] = p.rotator("Rotation");
+        let scale = p.f32("DrawScale", 1.0);
+        let to_world = Mat4::from_translation(loc + Vec3::from(p.vec3("PrePivot")))
+            * rotator_matrix(pitch, yaw, roll)
+            * Mat4::from_scale(Vec3::splat(scale))
+            * mesh_to_object(&mesh.transform);
+
+        // Textures: the object's own per-slot skins, then the mesh's, then the object's skin.
+        let style = p.byte("Style", 1);
+        let skin = p.get("Skin").and_then(|v| v.as_str()).map(str::to_owned);
+        let materials = mesh
+            .materials
+            .iter()
+            .map(|m| {
+                let slot = m.slot.max(0) as usize;
+                let key = if slot == 0 { "MultiSkins".to_owned() } else { format!("MultiSkins[{slot}]") };
+                let multi = p.get(&key).and_then(|v| v.as_str()).map(str::to_owned);
+                let path = multi.or_else(|| m.texture.clone()).or_else(|| skin.clone());
+                let tex = path.as_deref().map_or(0, |t| textures.get(t));
+                let masked = path.as_deref().and_then(|t| textures.info(t)).is_some_and(|t| t.masked);
+                let f = m.poly_flags;
+                let blend = if style == 3 || f & poly_flags::TRANSLUCENT != 0 {
+                    Blend::Translucent
+                } else if style == 4 || f & poly_flags::MODULATED != 0 {
+                    Blend::Modulated
+                } else if style == 2 || masked || f & poly_flags::MASKED != 0 {
+                    Blend::Masked
+                } else {
+                    Blend::Opaque
+                };
+                (tex, blend)
+            })
+            .collect();
+
+        // Lights that can reach the object.
+        let size = (Vec3::from(mesh.bounds_max) - Vec3::from(mesh.bounds_min)).length() * scale;
+        let lights =
+            all_lights.iter().filter(|l| l.location.distance(loc) < l.radius + size).copied().collect();
+        let ambient = zone_ambient(level, classes, zone_at(&level.model, loc));
+
+        let seq_name = p.get("AnimSequence").and_then(|v| v.as_str()).map(str::to_owned);
+        let motion = match &mesh.body {
+            MeshBody::Skeletal { bones, .. } => {
+                let anim = entry.and_then(|e| e.animation_file.clone()).and_then(|f| {
+                    self.anims
+                        .entry(f.clone())
+                        .or_insert_with(|| load_binary(&data.join(&f)).ok().map(Arc::new))
+                        .clone()
+                });
+                match anim {
+                    Some(anim) => {
+                        // The map's sequence, else a standing-still one (behaviour code will
+                        // choose animations later).
+                        let find = |want: &str| {
+                            anim.sequences.iter().position(|s| s.info.name.eq_ignore_ascii_case(want))
+                        };
+                        let seq = seq_name.as_deref().and_then(find).or_else(|| {
+                            anim.sequences.iter().position(|s| {
+                                let n = s.info.name.to_ascii_lowercase();
+                                n.contains("breath") || n.contains("idle")
+                            })
+                        });
+                        match seq {
+                            Some(seq) => Motion::Skeletal { links: bone_links(bones, &anim), anim, seq },
+                            None => Motion::Still,
+                        }
+                    }
+                    None => Motion::Still,
+                }
+            }
+            MeshBody::Vertex { sequences, .. } => {
+                let seq = seq_name.and_then(|n| sequences.iter().find(|s| s.name.eq_ignore_ascii_case(&n)));
+                match seq {
+                    Some(s) if s.frames > 1 => {
+                        Motion::Frames { start: s.start_frame, frames: s.frames, rate: s.rate.max(1.0) }
+                    }
+                    Some(s) => Motion::Frames { start: s.start_frame, frames: 1, rate: 1.0 },
+                    None => Motion::Still,
+                }
+            }
+        };
+        Some(Instance {
+            mesh,
+            to_world,
+            materials,
+            lights,
+            ambient,
+            unlit: p.bool("bUnlit"),
+            phase: (n as f32 * 0.37) % 1.0,
+            motion,
+        })
     }
 }
 
