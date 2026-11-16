@@ -338,6 +338,20 @@ fn cmd_collide(data: &Path, map: &str) -> Result<ExitCode> {
             );
         }
     }
+    {
+        let classes: hp1_data::ClassTable =
+            serde_json::from_slice(&std::fs::read(data.join("classes.json"))?)?;
+        let g = hp1_engine::nav::NavGraph::new(&level, &classes);
+        let mut groups = g.groups();
+        groups.sort_unstable_by(|a, b| b.cmp(a));
+        println!(
+            "{} navigation points, {} links, {} linked groups (largest {:?})",
+            g.len(),
+            g.link_count(),
+            groups.len(),
+            &groups[..groups.len().min(5)]
+        );
+    }
     println!("{traces} traces in {:.2} ms", t.elapsed().as_secs_f64() * 1000.0);
     Ok(ExitCode::SUCCESS)
 }
