@@ -28,7 +28,7 @@ const USAGE: &str = "usage:
   hp1-tools convert <game folder> <output folder>
   hp1-tools render-mesh <converted folder> <mesh> <out.png> [sequence] [time 0..1]
   hp1-tools light-maps <converted folder> <map> <out.png>
-  hp1-tools actors <converted folder> <map> [name or class filter]
+  hp1-tools actors <converted folder> <map> [name or class filter] [--props]
   hp1-tools fire <converted folder> <texture> <out.png>
   hp1-tools check-audio <converted folder>
   hp1-tools collide <converted folder> <map>";
@@ -52,9 +52,12 @@ fn main() -> ExitCode {
         Some("light-maps") if args.len() == 4 => {
             preview::light_maps(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
         }
-        Some("actors") if (3..=4).contains(&args.len()) => {
-            cmd_actors(Path::new(&args[1]), &args[2], args.get(3).map(String::as_str))
-        }
+        Some("actors") if (3..=5).contains(&args.len()) => cmd_actors(
+            Path::new(&args[1]),
+            &args[2],
+            args.get(3).map(String::as_str),
+            args.get(4).is_some_and(|a| a == "--props"),
+        ),
         Some("fire") if args.len() == 4 => {
             preview::fire(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
         }
@@ -261,7 +264,7 @@ fn cmd_check_data(game: &Path) -> Result<ExitCode> {
 /// outwards from the first start and walks Harry from there: a quick check of collision on a map.
 fn cmd_collide(data: &Path, map: &str) -> Result<ExitCode> {
     use glam::Vec3;
-    use hp1_engine::collision::trace;
+    use hp1_engine::collision::trace_model as trace;
     let level: hp1_data::level::LevelFile =
         hp1_data::mesh::load_binary(&data.join("levels").join(format!("{map}.level")))?;
     let model = &level.model;
@@ -339,7 +342,7 @@ fn cmd_collide(data: &Path, map: &str) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_actors(data: &Path, map: &str, filter: Option<&str>) -> Result<ExitCode> {
+fn cmd_actors(data: &Path, map: &str, filter: Option<&str>, props: bool) -> Result<ExitCode> {
     let level: hp1_data::level::LevelFile =
         hp1_data::mesh::load_binary(&data.join("levels").join(format!("{map}.level")))?;
     let filter = filter.map(str::to_ascii_lowercase);
@@ -354,6 +357,22 @@ fn cmd_actors(data: &Path, map: &str, filter: Option<&str>) -> Result<ExitCode> 
         let loc = a.props.get("Location").and_then(hp1_data::DataValue::as_vec3).unwrap_or([0.0; 3]);
         let seq = a.props.get("AnimSequence").and_then(hp1_data::DataValue::as_str).unwrap_or("");
         println!("{i:5} {:28} {:32} {:8.0} {:8.0} {:8.0} {seq}", a.name, a.class, loc[0], loc[1], loc[2]);
+        if props {
+            if let Some(b) = a.brush.as_ref().and_then(|k| level.brushes.get(k)) {
+                let m = &b.model;
+                println!(
+                    "        brush: {} polys, {} nodes, {} surfaces, {} light maps, {} hull ints",
+                    b.polys.len(),
+                    m.nodes.len(),
+                    m.surfaces.len(),
+                    m.light_maps.len(),
+                    m.leaf_hulls.len()
+                );
+            }
+            for (k, v) in &a.props {
+                println!("        {k} = {}", serde_json::to_string(v)?);
+            }
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

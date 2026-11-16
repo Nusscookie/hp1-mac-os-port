@@ -238,10 +238,34 @@ fn ambient(level: &LevelFile, classes: &ClassTable, zone_actor: i32) -> Vec3 {
     hsb_to_rgb(p.byte("AmbientHue", 0), p.byte("AmbientSaturation", 255), p.byte("AmbientBrightness", 0))
 }
 
+/// The light map of surface `surf`. Brush objects (movers) store one map per surface in surface
+/// order and leave the surface's own index unset.
+pub fn surface_light_map(model: &Model, surf: usize) -> Option<usize> {
+    let s = model.surfaces.get(surf)?;
+    match usize::try_from(s.light_map) {
+        Ok(i) => Some(i),
+        Err(_) if model.light_maps.len() == model.surfaces.len() => Some(surf),
+        Err(_) => None,
+    }
+}
+
 /// Builds every light map of the level's geometry. The result is indexed like
 /// `level.model.light_maps`; maps no surface uses stay `None`.
 pub fn build_level_light_maps(level: &LevelFile, classes: &ClassTable) -> Vec<Option<LightMapImage>> {
-    let model = &level.model;
+    build_light_maps(&level.model, level, classes, glam::Mat3::IDENTITY, Vec3::ZERO, None)
+}
+
+/// Builds the light maps of any model of the level: the level itself, or a brush object's own
+/// geometry placed in the world by `rotation` and `offset` (world = rotation · point + offset).
+/// Brush objects take their ambient light from `zone_actor` (the zone they start in).
+pub fn build_light_maps(
+    model: &Model,
+    level: &LevelFile,
+    classes: &ClassTable,
+    rotation: glam::Mat3,
+    offset: Vec3,
+    zone_actor: Option<i32>,
+) -> Vec<Option<LightMapImage>> {
     let lights: Vec<Option<LightSource>> = level
         .actors
         .iter()
@@ -255,13 +279,14 @@ pub fn build_level_light_maps(level: &LevelFile, classes: &ClassTable) -> Vec<Op
         else {
             continue;
         };
-        if let Ok(lm) = usize::try_from(surf.1.light_map)
+        if let Some(lm) = surface_light_map(model, surf.0)
             && lm < owner.len()
             && owner[lm].is_none()
         {
             let zone = if node.zone[1] != 0 { node.zone[1] } else { node.zone[0] };
-            let zone_actor =
-                usize::try_from(zone).ok().and_then(|z| model.zones.get(z)).map_or(-1, |z| z.actor);
+            let zone_actor = zone_actor.unwrap_or_else(|| {
+                usize::try_from(zone).ok().and_then(|z| model.zones.get(z)).map_or(-1, |z| z.actor)
+            });
             owner[lm] = Some((surf.0, zone_actor));
         }
     }
@@ -290,8 +315,9 @@ pub fn build_level_light_maps(level: &LevelFile, classes: &ClassTable) -> Vec<Op
                 v: vector(s.texture_v),
                 normal: vector(s.normal),
             };
-            let n = frame.normal.normalize_or_zero();
-            let positions = frame.texel_positions(lm);
+            let n = (rotation * frame.normal).normalize_or_zero();
+            let positions: Vec<Vec3> =
+                frame.texel_positions(lm).into_iter().map(|p| rotation * p + offset).collect();
             let base = ambient(level, classes, zone_actor);
             let mut texels = vec![base; positions.len()];
             if let Ok(first) = usize::try_from(lm.first_light) {

@@ -1,13 +1,15 @@
 //! Fly through a converted map.
 //!
 //!   hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH]
-//!              [--music <name>] [--mute]
+//!              [--music <name>] [--mute] [--trigger <tag>] [--run <seconds>]
 //!
 //! Mouse looks around, WASD moves, Q/E go down/up, Shift is faster, C prints the camera (for
 //! `--camera`), Escape quits. F switches between flying and walking as Harry (Space jumps), which
-//! tests the collision. With `--shot` it renders one image without opening a window.
+//! tests the collision. With `--shot` it renders one image without opening a window, after
+//! optionally sending `--trigger` and running the world for `--run` seconds.
 
 mod actors;
+mod movers;
 mod sound;
 mod textures;
 
@@ -19,13 +21,14 @@ use glam::{Mat4, Vec3};
 use hp1_data::ClassTable;
 use hp1_data::level::LevelFile;
 use hp1_data::mesh::load_binary;
-use hp1_engine::level_mesh::{Style, TextureSize, build_level_mesh};
+use hp1_engine::level_mesh::{LightPacker, build_model_mesh};
 use hp1_engine::lighting::build_level_light_maps;
 use hp1_engine::props::ActorProps;
 use hp1_engine::units::{ROT_TO_RAD, rotator_matrix};
+use hp1_engine::world::{Entity, World};
 use hp1_platform::sdl3::event::{Event, WindowEvent};
 use hp1_platform::sdl3::keyboard::{Keycode, Scancode};
-use hp1_render::{Blend, DrawBatch, Geometry, Gpu, Image, Scene, SceneDesc, Vertex, WorldRenderer, wgpu};
+use hp1_render::{DrawBatch, Geometry, Gpu, Image, Scene, SceneDesc, Vertex, WorldRenderer, wgpu};
 use textures::Textures;
 
 struct Args {
@@ -36,14 +39,26 @@ struct Args {
     size: (u32, u32),
     music: Option<String>,
     mute: bool,
+    trigger: Vec<String>,
+    run: f32,
 }
 
 fn parse_args() -> Result<Args> {
     let mut it = std::env::args().skip(1);
-    let usage = "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH] [--music <name>] [--mute]";
+    let usage = "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH] [--music <name>] [--mute] [--trigger <tag>] [--run <seconds>]";
     let data = PathBuf::from(it.next().context(usage)?);
     let map = it.next().context(usage)?;
-    let mut args = Args { data, map, shot: None, camera: None, size: (1280, 800), music: None, mute: false };
+    let mut args = Args {
+        data,
+        map,
+        shot: None,
+        camera: None,
+        size: (1280, 800),
+        music: None,
+        mute: false,
+        trigger: Vec::new(),
+        run: 0.0,
+    };
     while let Some(a) = it.next() {
         if a == "--mute" {
             args.mute = true;
@@ -53,6 +68,8 @@ fn parse_args() -> Result<Args> {
         match a.as_str() {
             "--shot" => args.shot = Some(v.into()),
             "--music" => args.music = Some(v),
+            "--trigger" => args.trigger.push(v),
+            "--run" => args.run = v.parse()?,
             "--camera" => {
                 let n: Vec<f32> = v.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
                 args.camera = Some(n.try_into().map_err(|_| anyhow!("--camera wants 5 numbers"))?);
@@ -107,8 +124,9 @@ struct Loaded {
     actors: actors::Actors,
     animations: Vec<textures::Animation>,
     fires: Vec<textures::FireTexture>,
-    level: LevelFile,
-    classes: ClassTable,
+    movers: movers::Movers,
+    /// The running level (it owns the level data and class table).
+    world: World,
     start: Camera,
     /// Where the sky is seen from (the sky zone's position), if the map has one.
     sky_origin: Option<Vec3>,
@@ -131,43 +149,14 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
     let mut textures = Textures::open(data)?;
 
     let light_maps = build_level_light_maps(&level, &classes);
-    let mesh = build_level_mesh(&level, &light_maps, |path| {
-        let t = textures.info(path)?;
-        Some(TextureSize {
-            width: t.width,
-            height: t.height,
-            draw_scale: textures.draw_scale(path),
-            masked: t.masked,
-        })
-    });
-
-    let mut indices = Vec::new();
-    let mut batches = Vec::new();
-    for b in &mesh.batches {
-        let tex = b.texture.as_deref().map_or(0, |t| textures.get(t));
-        let blend = match b.style {
-            Style::Opaque => Blend::Opaque,
-            Style::Sky => Blend::Sky,
-            Style::Masked => Blend::Masked,
-            Style::Translucent => Blend::Translucent,
-            Style::Modulated => Blend::Modulated,
-        };
-        batches.push(DrawBatch {
-            texture: tex,
-            lightmap: b.lightmap_page,
-            blend,
-            first_index: indices.len() as u32,
-            index_count: b.indices.len() as u32,
-        });
-        indices.extend_from_slice(&b.indices);
-    }
-    let vertices: Vec<Vertex> = mesh
-        .vertices
-        .iter()
-        .map(|v| Vertex { pos: v.pos, uv: v.uv, lm_uv: v.lm_uv, color: [1.0; 3] })
-        .collect();
+    let mut packer = LightPacker::default();
+    let mesh =
+        build_model_mesh(&level.model, &light_maps, &mut packer, |p| movers::texture_size(&textures, p));
+    let (vertices, indices, batches) = movers::to_draw(&mesh, &mut textures);
+    let world = World::new(level.clone(), classes.clone());
+    let movers = movers::Movers::build(&world, &level, &classes, &mut packer, &mut textures);
     let lightmaps: Vec<Image> =
-        mesh.light_pages.into_iter().map(|p| Image { width: p.size, height: p.size, rgba: p.rgba }).collect();
+        packer.pages.into_iter().map(|p| Image { width: p.size, height: p.size, rgba: p.rgba }).collect();
 
     // Start where the player starts, at eye height.
     let start = level
@@ -212,11 +201,12 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
     println!("{} moving objects, rebuilt per frame in {:.2?}", actors.moving_count(), rebuild.elapsed());
 
     println!(
-        "{map}: {} triangles in {} batches, {} objects ({} without a mesh file), {} textures ({} missing), {} light map pages, loaded in {:.2?}",
+        "{map}: {} triangles in {} batches, {} objects ({} without a mesh file), {} movers, {} textures ({} missing), {} light map pages, loaded in {:.2?}",
         indices.len() / 3,
         batches.len(),
         actors.count,
         actors.skipped,
+        movers.count(),
         textures.images.len() - 1,
         textures.missing,
         lightmaps.len(),
@@ -231,14 +221,15 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         actors,
         animations,
         fires,
-        level,
-        classes,
+        movers,
+        world,
         start,
         sky_origin,
     })
 }
 
-/// Uploads the level; geometry slot 1 holds the still objects, slot 2 the moving ones.
+/// Uploads the level; geometry slot 1 holds the still objects, slot 2 the moving ones, slot 3 the
+/// movers.
 fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
     let mut scene = renderer.upload(
         gpu,
@@ -254,12 +245,16 @@ fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
     scene.geometry.push(Geometry::new(gpu, &still.vertices, &still.indices, still.batches));
     let moving = l.actors.build_moving(0.0);
     scene.geometry.push(Geometry::new(gpu, &moving.vertices, &moving.indices, moving.batches));
+    scene.geometry.push(Geometry::new(gpu, &[], &[], Vec::new()));
     scene
 }
 
 fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &mut Loaded, time: f32) {
     let moving = l.actors.build_moving(time);
     scene.geometry[2].update(gpu, &moving.vertices, &moving.indices, moving.batches);
+    if let Some((v, i, b)) = l.movers.build_if_moved(&l.world) {
+        scene.geometry[3].update(gpu, &v, &i, b);
+    }
     for a in &l.animations {
         let frame = (time * a.fps) as usize % a.frames.len();
         if let Some(slot) = scene.texture_map.get_mut(a.base as usize) {
@@ -285,7 +280,17 @@ fn main() -> Result<()> {
     if let Some(out) = &args.shot {
         let gpu = Gpu::new(hp1_render::create_instance(), None).map_err(|e| anyhow!(e))?;
         let renderer = WorldRenderer::new(&gpu, wgpu::TextureFormat::Rgba8Unorm);
-        let scene = upload(&gpu, &renderer, &loaded);
+        let mut scene = upload(&gpu, &renderer, &loaded);
+        for tag in &args.trigger {
+            loaded.world.trigger_event(tag, None);
+        }
+        for _ in 0..(args.run * 60.0) as usize {
+            loaded.world.tick(1.0 / 60.0);
+        }
+        for o in loaded.world.outputs.drain(..) {
+            println!("world: {o:?}");
+        }
+        update_moving(&gpu, &mut scene, &mut loaded, args.run.max(1.0));
         let (w, h) = args.size;
         let img = hp1_render::render_offscreen(
             &gpu,
@@ -305,8 +310,8 @@ fn main() -> Result<()> {
             let (count, song) = sound::start(
                 &mut lib,
                 &mixer,
-                &loaded.level,
-                &loaded.classes,
+                &loaded.world.level,
+                &loaded.world.classes,
                 args.music.as_deref(),
                 camera.pos,
             );
@@ -355,18 +360,19 @@ fn main() -> Result<()> {
 
     // Sound: ambient sounds of placed objects and one music track.
     let mixer = std::sync::Arc::new(std::sync::Mutex::new(hp1_audio::Mixer::new(44100)));
+    let mut lib = sound::Library::open(&args.data)?;
+    let mut ambient = std::collections::HashMap::new();
     let _audio = if args.mute {
         None
     } else {
         let m = mixer.clone();
         match platform.open_audio(44100, move |out| m.lock().unwrap_or_else(|e| e.into_inner()).mix(out)) {
             Ok(output) => {
-                let mut lib = sound::Library::open(&args.data)?;
                 let (count, song) = sound::start(
                     &mut lib,
                     &mixer,
-                    &loaded.level,
-                    &loaded.classes,
+                    &loaded.world.level,
+                    &loaded.world.classes,
                     args.music.as_deref(),
                     camera.pos,
                 );
@@ -385,6 +391,8 @@ fn main() -> Result<()> {
     let eye = 40.75;
     let mut walker: Option<hp1_engine::walk::Body> = None;
     let mut jump = false;
+    // Harry in the world, so triggers notice him (flying or walking).
+    let harry = loaded.world.spawn(Entity::pawn("Harry", "HarryPotter.Harry", camera.pos, 15.0, 42.0, true));
 
     platform.set_mouse_captured(true);
     let mut last = Instant::now();
@@ -406,7 +414,7 @@ fn main() -> Result<()> {
                         Some(_) => None,
                         None => {
                             let mut b = hp1_engine::walk::Body::new(camera.pos - Vec3::Z * eye, 15.0, 42.0);
-                            b.settle(&loaded.level.model);
+                            b.settle(&loaded.world.collider(Some(harry)));
                             Some(b)
                         }
                     };
@@ -444,13 +452,28 @@ fn main() -> Result<()> {
                 wish += dir;
             }
         }
+        let world = &mut loaded.world;
+        world.tick(dt);
         if let Some(body) = &mut walker {
             let flat = (wish * Vec3::new(1.0, 1.0, 0.0)).normalize_or_zero();
             let can_jump = body.mode == hp1_engine::walk::Mode::Walking;
+            // Ride along with whatever we stand on.
+            if let Some(moved) = body.base.and_then(|b| world.get(b)).map(|e| e.moved) {
+                body.pos += moved;
+            }
             // Small fixed steps keep the movement the same at any frame rate.
             let steps = (dt / (1.0 / 120.0)).ceil().max(1.0);
             for i in 0..steps as usize {
-                body.tick(&loaded.level.model, &movement, flat, jump && can_jump && i == 0, dt / steps);
+                body.tick(
+                    &world.collider(Some(harry)),
+                    &movement,
+                    flat,
+                    jump && can_jump && i == 0,
+                    dt / steps,
+                );
+                if let Some(b) = body.bumped.take() {
+                    world.bump(b, harry);
+                }
             }
             camera.pos = body.pos + Vec3::Z * eye;
         } else {
@@ -458,6 +481,15 @@ fn main() -> Result<()> {
             camera.pos += wish.normalize_or_zero() * speed * dt;
         }
         jump = false;
+        if let Some(e) = world.get_mut(harry) {
+            e.pos = walker.map_or(camera.pos - Vec3::Z * eye, |b| b.pos);
+            e.base = walker.and_then(|b| b.base);
+        }
+        if args.mute {
+            world.outputs.clear();
+        } else {
+            sound::play_outputs(&mut lib, &mixer, &mut world.outputs, &mut ambient);
+        }
         mixer.lock().unwrap_or_else(|e| e.into_inner()).set_listener(camera.pos, right);
 
         let frame = match surface.get_current_texture() {

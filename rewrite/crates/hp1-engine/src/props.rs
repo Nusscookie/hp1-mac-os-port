@@ -29,6 +29,9 @@ impl<'a> ActorProps<'a> {
     pub fn bool(&self, name: &str) -> bool {
         self.get(name).and_then(DataValue::as_bool).unwrap_or(false)
     }
+    pub fn bool_or(&self, name: &str, fallback: bool) -> bool {
+        self.get(name).and_then(DataValue::as_bool).unwrap_or(fallback)
+    }
     pub fn vec3(&self, name: &str) -> [f32; 3] {
         self.get(name).and_then(DataValue::as_vec3).unwrap_or([0.0; 3])
     }

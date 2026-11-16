@@ -10,3 +10,6 @@ publish.workspace = true
 [dependencies]
 hp1-data.workspace = true
 glam.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,9 +1,7 @@
 //! Walking and falling characters (see `specs/engine/Walking.md`).
 
+use crate::collision::{Collider, Hit, find_spot, move_box};
 use glam::{Vec3, Vec3Swizzles};
-use hp1_data::level::Model;
-
-use crate::collision::{Hit, find_spot, move_box, overlaps};
 
 /// Floors whose normal points up at least this much can be walked on (about 45°).
 pub const WALKABLE_Z: f32 = 0.7;
@@ -49,26 +47,37 @@ pub struct Body {
     /// Half-size: (radius, radius, height).
     pub extent: Vec3,
     pub mode: Mode,
+    /// What it stands on (an actor such as a lift), if not the level.
+    pub base: Option<usize>,
+    /// An actor it walked into during the last tick (doors open when bumped).
+    pub bumped: Option<usize>,
 }
 
 impl Body {
     pub fn new(pos: Vec3, radius: f32, height: f32) -> Self {
-        Self { pos, vel: Vec3::ZERO, extent: Vec3::new(radius, radius, height), mode: Mode::Falling }
+        Self {
+            pos,
+            vel: Vec3::ZERO,
+            extent: Vec3::new(radius, radius, height),
+            mode: Mode::Falling,
+            base: None,
+            bumped: None,
+        }
     }
 
     /// Moves the body out of the geometry if it was placed touching it.
-    pub fn settle(&mut self, model: &Model) {
+    pub fn settle(&mut self, model: &dyn Collider) {
         if let Some(p) = find_spot(model, self.pos, self.extent, self.extent.z) {
             self.pos = p;
         }
     }
 
     /// One tick. `wish` is the wanted horizontal direction (length 0..1).
-    pub fn tick(&mut self, model: &Model, m: &Movement, wish: Vec3, jump: bool, dt: f32) {
+    pub fn tick(&mut self, model: &dyn Collider, m: &Movement, wish: Vec3, jump: bool, dt: f32) {
         if dt <= 0.0 {
             return;
         }
-        if overlaps(model, self.pos, self.extent) {
+        if model.overlaps(self.pos, self.extent) {
             self.settle(model);
         }
         let wish = (wish * Vec3::new(1.0, 1.0, 0.0)).clamp_length_max(1.0);
@@ -110,7 +119,7 @@ impl Body {
         self.vel = v.extend(self.vel.z);
     }
 
-    fn walk(&mut self, model: &Model, m: &Movement, dt: f32) {
+    fn walk(&mut self, model: &dyn Collider, m: &Movement, dt: f32) {
         let delta = self.vel * dt;
         if delta.length_squared() > 0.0 {
             let start = self.pos;
@@ -122,6 +131,7 @@ impl Body {
                     // A ramp: carry on along its surface.
                     self.slide(model, left, hit.normal);
                 } else if !self.step_up(model, left, m.step_height) {
+                    self.bumped = hit.actor.or(self.bumped);
                     self.slide(model, left, horizontal(hit.normal));
                     // Lose the speed that went into the wall, so it doesn't build up.
                     let moved = (self.pos - start).xy() / dt;
@@ -134,13 +144,19 @@ impl Body {
         // Stay on the floor: look down at most a step's height.
         let (p, floor) = move_box(model, self.pos, Vec3::Z * -(m.step_height + 2.0), self.extent);
         match floor {
-            Some(f) if f.normal.z >= WALKABLE_Z => self.pos = p,
-            _ => self.mode = Mode::Falling,
+            Some(f) if f.normal.z >= WALKABLE_Z => {
+                self.pos = p;
+                self.base = f.actor;
+            }
+            _ => {
+                self.mode = Mode::Falling;
+                self.base = None;
+            }
         }
     }
 
     /// Tries to get over an obstacle by lifting, moving and putting down again.
-    fn step_up(&mut self, model: &Model, left: Vec3, height: f32) -> bool {
+    fn step_up(&mut self, model: &dyn Collider, left: Vec3, height: f32) -> bool {
         let (up, _) = move_box(model, self.pos, Vec3::Z * height, self.extent);
         let (across, blocked) = move_box(model, up, left, self.extent);
         let gained = (across - up).xy().length();
@@ -163,7 +179,7 @@ impl Body {
     }
 
     /// Moves what is left of a move along a surface.
-    fn slide(&mut self, model: &Model, left: Vec3, normal: Vec3) {
+    fn slide(&mut self, model: &dyn Collider, left: Vec3, normal: Vec3) {
         let mut delta = left - normal * left.dot(normal);
         let mut normal = normal;
         for _ in 0..2 {
@@ -186,7 +202,7 @@ impl Body {
         }
     }
 
-    fn fall(&mut self, model: &Model, _m: &Movement, dt: f32) {
+    fn fall(&mut self, model: &dyn Collider, _m: &Movement, dt: f32) {
         let mut delta = self.vel * dt;
         for _ in 0..3 {
             if delta.length_squared() < 1e-6 {
@@ -194,9 +210,10 @@ impl Body {
             }
             let (p, hit) = move_box(model, self.pos, delta, self.extent);
             self.pos = p;
-            let Some(Hit { time, normal, .. }) = hit else { return };
+            let Some(Hit { time, normal, actor, .. }) = hit else { return };
             if normal.z >= WALKABLE_Z && self.vel.z <= 0.0 {
                 self.mode = Mode::Walking;
+                self.base = actor;
                 self.vel.z = 0.0;
                 return;
             }
@@ -218,7 +235,7 @@ mod tests {
     use super::*;
     use crate::collision::tests::{floor, ramp, step};
 
-    fn run(model: &Model, body: &mut Body, wish: Vec3, seconds: f32) {
+    fn run(model: &hp1_data::level::Model, body: &mut Body, wish: Vec3, seconds: f32) {
         let m = Movement::default();
         for _ in 0..(seconds * 60.0) as usize {
             body.tick(model, &m, wish, false, 1.0 / 60.0);

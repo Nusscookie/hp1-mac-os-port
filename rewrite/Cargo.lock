@@ -502,6 +502,7 @@ version = "0.0.1"
 dependencies = [
  "glam",
  "hp1-data",
+ "serde_json",
 ]
 
 [[package]]

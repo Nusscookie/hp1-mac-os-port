@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use glam::Vec3;
-use hp1_audio::{Clip, Mixer, Placement};
+use hp1_audio::{Clip, Mixer, Placement, VoiceId};
 use hp1_data::level::LevelFile;
 use hp1_data::{AudioInfo, ClassTable, DataValue};
 use hp1_engine::props::ActorProps;
@@ -40,7 +40,7 @@ impl Library {
         })
     }
 
-    fn clip(&mut self, path: &str, music: bool) -> Option<Clip> {
+    pub fn clip(&mut self, path: &str, music: bool) -> Option<Clip> {
         let key = path.to_ascii_lowercase();
         if let Some(c) = self.clips.get(&key) {
             return c.clone();
@@ -103,4 +103,46 @@ pub fn start(
         m.play_music(clip);
     }
     (started, song.filter(|_| music_clip.is_some()))
+}
+
+/// Plays what the world asked for since the last call.
+pub fn play_outputs(
+    lib: &mut Library,
+    mixer: &Arc<Mutex<Mixer>>,
+    outputs: &mut Vec<hp1_engine::world::Output>,
+    ambient: &mut HashMap<usize, VoiceId>,
+) {
+    use hp1_engine::world::Output;
+    if outputs.is_empty() {
+        return;
+    }
+    let mut m = mixer.lock().unwrap_or_else(|e| e.into_inner());
+    for o in outputs.drain(..) {
+        match o {
+            Output::Sound { path, at, radius, volume } => {
+                if let Some(c) = lib.clip(&path, false) {
+                    m.play(&c, Placement::At { position: at, radius }, volume, 1.0, false);
+                }
+            }
+            Output::AmbientStart { actor, path, at, radius, volume } => {
+                if let Some(c) = lib.clip(&path, false) {
+                    let id = m.play(&c, Placement::At { position: at, radius }, volume, 1.0, true);
+                    if let Some(old) = ambient.insert(actor, id) {
+                        m.stop(old);
+                    }
+                }
+            }
+            Output::AmbientStop { actor } => {
+                if let Some(id) = ambient.remove(&actor) {
+                    m.stop(id);
+                }
+            }
+            Output::Music { song } => match song.and_then(|s| lib.clip(&s, true)) {
+                Some(c) => {
+                    m.play_music(&c);
+                }
+                None => m.stop_music(),
+            },
+        }
+    }
 }

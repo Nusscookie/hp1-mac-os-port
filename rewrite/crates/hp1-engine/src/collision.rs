@@ -24,8 +24,27 @@ pub struct Hit {
     pub time: f32,
     /// Surface normal at the hit, pointing away from the solid.
     pub normal: Vec3,
-    /// The BSP node whose hull was hit.
+    /// The BSP node whose hull was hit (of the level, or of the actor's brush).
     pub node: usize,
+    /// The actor that was hit; None for the level itself.
+    pub actor: Option<usize>,
+}
+
+/// Anything boxes can be swept against: the level alone, or the level with its actors.
+pub trait Collider {
+    /// The first hit of a box with half-size `extent` moving from `start` to `end`.
+    fn trace(&self, start: Vec3, end: Vec3, extent: Vec3) -> Option<Hit>;
+    /// Whether a box at `pos` is inside something solid.
+    fn overlaps(&self, pos: Vec3, extent: Vec3) -> bool;
+}
+
+impl Collider for Model {
+    fn trace(&self, start: Vec3, end: Vec3, extent: Vec3) -> Option<Hit> {
+        trace_model(self, start, end, extent)
+    }
+    fn overlaps(&self, pos: Vec3, extent: Vec3) -> bool {
+        overlaps_model(self, pos, extent)
+    }
 }
 
 /// Bit in a hull's plane index that means "use the plane reversed".
@@ -202,7 +221,7 @@ fn for_each_hull(
 
 /// Sweeps a box with half-size `extent` from `start` to `end` and returns the first hit.
 /// A zero extent traces a line. A box that starts inside solid is stopped at once.
-pub fn trace(model: &Model, start: Vec3, end: Vec3, extent: Vec3) -> Option<Hit> {
+pub fn trace_model(model: &Model, start: Vec3, end: Vec3, extent: Vec3) -> Option<Hit> {
     let (start, end, extent) = (start.as_dvec3(), end.as_dvec3(), extent.as_dvec3());
     let length = start.distance(end);
     if length < EPS {
@@ -216,14 +235,14 @@ pub fn trace(model: &Model, start: Vec3, end: Vec3, extent: Vec3) -> Option<Hit>
             && let Some(t) = s.hit(length)
             && best.is_none_or(|b| (t as f32) < b.time)
         {
-            best = Some(Hit { time: t as f32, normal: s.normal.as_vec3(), node: index });
+            best = Some(Hit { time: t as f32, normal: s.normal.as_vec3(), node: index, actor: None });
         }
     });
     best
 }
 
 /// Whether a box with half-size `extent` at `pos` is inside solid (touching doesn't count).
-pub fn overlaps(model: &Model, pos: Vec3, extent: Vec3) -> bool {
+pub fn overlaps_model(model: &Model, pos: Vec3, extent: Vec3) -> bool {
     let (pos, extent) = (pos.as_dvec3(), (extent.as_dvec3() - 0.05).max(DVec3::ZERO));
     let mut planes = Vec::new();
     let mut inside = false;
@@ -235,8 +254,8 @@ pub fn overlaps(model: &Model, pos: Vec3, extent: Vec3) -> bool {
 }
 
 /// Moves a box as far as it can towards `pos + delta`. Returns where it ended and what stopped it.
-pub fn move_box(model: &Model, pos: Vec3, delta: Vec3, extent: Vec3) -> (Vec3, Option<Hit>) {
-    match trace(model, pos, pos + delta, extent) {
+pub fn move_box(c: &(impl Collider + ?Sized), pos: Vec3, delta: Vec3, extent: Vec3) -> (Vec3, Option<Hit>) {
+    match c.trace(pos, pos + delta, extent) {
         Some(hit) => (pos + delta * hit.time, Some(hit)),
         None => (pos + delta, None),
     }
@@ -244,14 +263,14 @@ pub fn move_box(model: &Model, pos: Vec3, delta: Vec3, extent: Vec3) -> (Vec3, O
 
 /// The nearest place to `pos` where the box is free: first straight up (up to `up`), then in rings
 /// around. None if there is no room nearby.
-pub fn find_spot(model: &Model, pos: Vec3, extent: Vec3, up: f32) -> Option<Vec3> {
-    if !overlaps(model, pos, extent) {
+pub fn find_spot(c: &(impl Collider + ?Sized), pos: Vec3, extent: Vec3, up: f32) -> Option<Vec3> {
+    if !c.overlaps(pos, extent) {
         return Some(pos);
     }
     let mut z = 1.0;
     while z <= up {
         let p = pos + Vec3::Z * z;
-        if !overlaps(model, p, extent) {
+        if !c.overlaps(p, extent) {
             return Some(p);
         }
         z += 1.0;
@@ -262,7 +281,7 @@ pub fn find_spot(model: &Model, pos: Vec3, extent: Vec3, up: f32) -> Option<Vec3
             let a = k as f32 * std::f32::consts::FRAC_PI_4;
             for dz in [0.0, up * 0.5, up] {
                 let p = pos + Vec3::new(a.cos() * r, a.sin() * r, dz);
-                if !overlaps(model, p, extent) {
+                if !c.overlaps(p, extent) {
                     return Some(p);
                 }
             }
@@ -349,10 +368,27 @@ pub(crate) mod tests {
         }
     }
 
+    /// A solid cube of half-size `h` around the origin.
+    pub(crate) fn cube(h: f32) -> Model {
+        let mut hulls = Vec::new();
+        let at = push_hull(&mut hulls, &[0, 1, 2, 3, 4, 5], [-h; 3], [h; 3]);
+        let planes = [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        let mut nodes: Vec<Node> = planes.iter().map(|n| node([n[0], n[1], n[2], h], -1, -1, -1)).collect();
+        nodes[0].collision_bound = at;
+        Model { nodes, leaf_hulls: hulls, ..Default::default() }
+    }
+
     #[test]
     fn line_hits_the_floor() {
-        let hit =
-            trace(&floor(), Vec3::new(0.0, 0.0, 100.0), Vec3::new(0.0, 0.0, -100.0), Vec3::ZERO).unwrap();
+        let hit = trace_model(&floor(), Vec3::new(0.0, 0.0, 100.0), Vec3::new(0.0, 0.0, -100.0), Vec3::ZERO)
+            .unwrap();
         assert!((hit.time - 0.5).abs() < 0.01, "{hit:?}");
         assert_eq!(hit.normal, Vec3::Z);
     }
@@ -360,19 +396,22 @@ pub(crate) mod tests {
     #[test]
     fn box_stops_its_half_height_above_the_floor() {
         let e = Vec3::new(10.0, 10.0, 40.0);
-        let hit = trace(&floor(), Vec3::new(0.0, 0.0, 100.0), Vec3::new(0.0, 0.0, -100.0), e).unwrap();
+        let hit = trace_model(&floor(), Vec3::new(0.0, 0.0, 100.0), Vec3::new(0.0, 0.0, -100.0), e).unwrap();
         let z = 100.0 - 200.0 * hit.time;
         assert!(z > 40.0 && z < 40.5, "stopped at {z}");
         // From where it stopped, it can still slide sideways.
-        assert!(trace(&floor(), Vec3::new(0.0, 0.0, z), Vec3::new(50.0, 0.0, z), e).is_none());
+        assert!(trace_model(&floor(), Vec3::new(0.0, 0.0, z), Vec3::new(50.0, 0.0, z), e).is_none());
         // But not move down any further.
-        let again = trace(&floor(), Vec3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, z - 10.0), e).unwrap();
+        let again = trace_model(&floor(), Vec3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, z - 10.0), e).unwrap();
         assert!(again.time < 0.001, "{again:?}");
     }
 
     #[test]
     fn moving_away_does_not_hit() {
-        assert!(trace(&floor(), Vec3::new(0.0, 0.0, 50.0), Vec3::new(0.0, 0.0, 200.0), Vec3::ZERO).is_none());
+        assert!(
+            trace_model(&floor(), Vec3::new(0.0, 0.0, 50.0), Vec3::new(0.0, 0.0, 200.0), Vec3::ZERO)
+                .is_none()
+        );
     }
 
     #[test]
@@ -381,7 +420,7 @@ pub(crate) mod tests {
         let e = Vec3::new(10.0, 10.0, 20.0);
         // Walking along +x at z = 21 (box bottom just above the floor), the box's front-bottom
         // corner reaches the slope.
-        let hit = trace(&m, Vec3::new(-50.0, 0.0, 21.0), Vec3::new(50.0, 0.0, 21.0), e).unwrap();
+        let hit = trace_model(&m, Vec3::new(-50.0, 0.0, 21.0), Vec3::new(50.0, 0.0, 21.0), e).unwrap();
         let x = -50.0 + 100.0 * hit.time;
         assert!(hit.normal.x < -0.5 && hit.normal.z > 0.5, "{hit:?}");
         assert!((x - -9.0).abs() < 1.0, "stopped at x = {x}");
@@ -391,6 +430,8 @@ pub(crate) mod tests {
     fn lines_miss_beside_the_ramp_hull() {
         let m = ramp();
         // Above the ramp top: passes over.
-        assert!(trace(&m, Vec3::new(-50.0, 0.0, 150.0), Vec3::new(200.0, 0.0, 150.0), Vec3::ZERO).is_none());
+        assert!(
+            trace_model(&m, Vec3::new(-50.0, 0.0, 150.0), Vec3::new(200.0, 0.0, 150.0), Vec3::ZERO).is_none()
+        );
     }
 }

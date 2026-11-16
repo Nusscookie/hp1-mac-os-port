@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use glam::Vec3;
-use hp1_data::level::LevelFile;
+use hp1_data::level::{LevelFile, Model};
 
 use crate::lighting::LightMapImage;
 
@@ -74,14 +74,16 @@ pub struct TextureSize {
 
 const PAGE_SIZE: u32 = 2048;
 
-struct Packer {
-    pages: Vec<LightPage>,
+/// Packs light maps into shared atlas pages.
+#[derive(Default)]
+pub struct LightPacker {
+    pub pages: Vec<LightPage>,
     x: u32,
     y: u32,
     row: u32,
 }
 
-impl Packer {
+impl LightPacker {
     /// Places a map with a one-texel border (copies of its edge) and returns (page, x, y) of the
     /// map's first real texel.
     fn place(&mut self, m: &LightMapImage) -> Option<(u32, u32, u32)> {
@@ -124,14 +126,26 @@ impl Packer {
 pub fn build_level_mesh(
     level: &LevelFile,
     light_maps: &[Option<LightMapImage>],
-    texture_size: impl Fn(&str) -> Option<TextureSize>,
+    texture_size: impl FnMut(&str) -> Option<TextureSize>,
+) -> LevelMesh {
+    let mut packer = LightPacker::default();
+    let mut mesh = build_model_mesh(&level.model, light_maps, &mut packer, texture_size);
+    mesh.light_pages = packer.pages;
+    mesh
+}
+
+/// The triangles of any model (the level or a brush object's own geometry), with its light maps
+/// placed into `packer`. `light_pages` of the result stays empty; the pages are in the packer.
+pub fn build_model_mesh(
+    model: &Model,
+    light_maps: &[Option<LightMapImage>],
+    packer: &mut LightPacker,
+    mut texture_size: impl FnMut(&str) -> Option<TextureSize>,
 ) -> LevelMesh {
     use poly_flags::*;
-    let model = &level.model;
     let point = |i: i32| usize::try_from(i).ok().and_then(|i| model.points.get(i)).map(|p| Vec3::from(*p));
     let vector = |i: i32| usize::try_from(i).ok().and_then(|i| model.vectors.get(i)).map(|p| Vec3::from(*p));
 
-    let mut packer = Packer { pages: Vec::new(), x: 0, y: 0, row: 0 };
     let placed: Vec<Option<(u32, u32, u32)>> =
         light_maps.iter().map(|m| m.as_ref().and_then(|m| packer.place(m))).collect();
 
@@ -143,7 +157,8 @@ pub fn build_level_mesh(
         if node.num_vertices < 3 {
             continue;
         }
-        let Some(surf) = usize::try_from(node.surf).ok().and_then(|s| model.surfaces.get(s)) else {
+        let surf_index = usize::try_from(node.surf).unwrap_or(usize::MAX);
+        let Some(surf) = model.surfaces.get(surf_index) else {
             continue;
         };
         let flags = surf.poly_flags;
@@ -174,8 +189,7 @@ pub fn build_level_mesh(
 
         // Light map placement, unless the surface is drawn full bright.
         let lit = flags & UNLIT == 0 && style != Style::Sky && style != Style::Modulated;
-        let lm = usize::try_from(surf.light_map)
-            .ok()
+        let lm = crate::lighting::surface_light_map(model, surf_index)
             .filter(|_| lit)
             .and_then(|i| Some((model.light_maps.get(i)?, placed.get(i).copied()??)));
         let page = lm.map_or(0, |(_, (p, _, _))| p);
@@ -229,6 +243,5 @@ pub fn build_level_mesh(
     }
     mesh.batches.retain(|b| !b.indices.is_empty());
     mesh.batches.sort_by_key(|b| b.style);
-    mesh.light_pages = packer.pages;
     mesh
 }

@@ -2,6 +2,7 @@
 //! here knows about Unreal.
 
 pub mod anim;
+pub mod behaviours;
 pub mod bsp;
 pub mod collision;
 pub mod level_mesh;
@@ -10,3 +11,4 @@ pub mod procedural;
 pub mod props;
 pub mod units;
 pub mod walk;
+pub mod world;

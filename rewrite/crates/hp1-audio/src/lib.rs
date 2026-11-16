@@ -153,6 +153,10 @@ impl Mixer {
         id
     }
 
+    pub fn stop_music(&mut self) {
+        self.voices.retain(|v| !v.music);
+    }
+
     pub fn stop(&mut self, id: VoiceId) {
         self.voices.retain(|v| v.id != id);
     }
