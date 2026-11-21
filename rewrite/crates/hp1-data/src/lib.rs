@@ -25,7 +25,7 @@ pub mod level;
 pub mod mesh;
 
 /// Bumped whenever a converted file changes shape; the game asks for a re-convert on mismatch.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// A property value copied from the CD, in plain form. References to other objects become their
 /// full dotted path (`Package.Group.Name`).

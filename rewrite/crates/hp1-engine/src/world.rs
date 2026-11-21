@@ -12,8 +12,11 @@ use glam::{Mat3, Vec3};
 use hp1_data::ClassTable;
 use hp1_data::level::{Actor, LevelFile};
 
+use crate::camera::CutCamera;
 use crate::collision::{Collider, Hit, overlaps_model, trace_model};
+use crate::dialog::{Lines, NoLines};
 use crate::props::ActorProps;
+use crate::puppet::Puppet;
 use crate::units::rotator_matrix;
 
 pub type ActorId = usize;
@@ -42,6 +45,22 @@ pub enum Output {
     Music {
         song: Option<String>,
     },
+    /// A dialogue voice, heard everywhere at full volume. A new one cuts off the one before
+    /// (the original plays them all in the same sound slot on Harry).
+    Voice {
+        path: String,
+    },
+    /// A message (dialogue subtitle) shown for `seconds`.
+    Message {
+        text: String,
+        seconds: f32,
+    },
+    /// Go to another level.
+    ChangeLevel {
+        map: String,
+    },
+    /// A script problem the original reported on the console (e.g. a target not found).
+    Note(String),
 }
 
 /// What an object does. Every method has a do-nothing default.
@@ -54,6 +73,8 @@ pub trait Behaviour {
     fn untouch(&mut self, _w: &mut World, _me: ActorId, _other: ActorId) {}
     /// A pawn walked into this object.
     fn bump(&mut self, _w: &mut World, _me: ActorId, _other: ActorId) {}
+    /// Something a cutscene told to move or turn has finished (cutscenes only).
+    fn cue(&mut self, _w: &mut World, _me: ActorId, _cue: &str) {}
 }
 
 /// The animation a character plays, for the program to draw.
@@ -61,8 +82,72 @@ pub trait Behaviour {
 pub struct Animation {
     /// Sequence name, e.g. `Walk`.
     pub name: String,
-    /// Seconds into the sequence (it loops).
+    /// Seconds into the sequence.
     pub time: f32,
+    /// Loops; otherwise it plays once and holds its last frame.
+    pub looping: bool,
+}
+
+impl Animation {
+    pub fn looping(name: &str) -> Self {
+        Self { name: name.to_owned(), time: 0.0, looping: true }
+    }
+}
+
+/// How long a mesh's animation sequence is: `frames` at `rate` frames per second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sequence {
+    pub frames: u32,
+    pub rate: f32,
+}
+
+impl Sequence {
+    /// When playing it once ends: at its last frame, or after 0.1 s for a single frame.
+    pub fn once(&self) -> f32 {
+        if self.frames > 1 && self.rate > 0.0 { (self.frames - 1) as f32 / self.rate } else { 0.1 }
+    }
+    /// One loop.
+    pub fn cycle(&self) -> f32 {
+        if self.frames > 1 && self.rate > 0.0 { self.frames as f32 / self.rate } else { 0.1 }
+    }
+}
+
+/// The screen fade (`specs/cutscenes/CutScene.md`): 0 is normal, −1 black.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Fade {
+    glow: f32,
+    rate: f32,
+}
+
+impl Fade {
+    /// Black at once, then brighter over `seconds`.
+    pub fn fade_in(&mut self, seconds: f32) {
+        self.glow = -1.0;
+        self.rate = if seconds > 0.0 { 1.0 / seconds } else { f32::MAX };
+    }
+    /// From normal to black over `seconds`.
+    pub fn fade_out(&mut self, seconds: f32) {
+        self.glow = 0.0;
+        self.rate = if seconds > 0.0 { -1.0 / seconds } else { -f32::MAX };
+    }
+    fn tick(&mut self, dt: f32) {
+        if self.rate == 0.0 {
+            return;
+        }
+        // The original steps the fade by at most 0.1 s per tick.
+        self.glow += self.rate * dt.min(0.1);
+        if self.glow <= -1.0 {
+            self.glow = -1.0;
+            self.rate = 0.0;
+        } else if self.glow >= 0.0 {
+            self.glow = 0.0;
+            self.rate = 0.0;
+        }
+    }
+    /// How bright the screen is drawn, 0..1.
+    pub fn brightness(&self) -> f32 {
+        1.0 + self.glow
+    }
 }
 
 pub struct Entity {
@@ -205,6 +290,19 @@ pub struct World {
     pub outputs: Vec<Output>,
     /// Objects spawned by `spawn_actor` since the program last looked, for it to load their meshes.
     pub spawned: Vec<ActorId>,
+    /// Harry, the player.
+    pub player: Option<ActorId>,
+    /// The camera the player looks through while a cutscene has it.
+    pub camera: CutCamera,
+    pub fade: Fade,
+    /// Cutscene mode: the HUD draws its black bars and Harry takes no input.
+    pub cut_mode: bool,
+    /// Dialogue text and voices.
+    pub lines: Box<dyn Lines>,
+    /// Characters and Harry while cutscenes drive them.
+    pub(crate) puppets: HashMap<ActorId, Puppet>,
+    /// Animation lengths per object, by lower-case sequence name (from the program's meshes).
+    sequences: HashMap<ActorId, HashMap<String, Sequence>>,
     touching: HashSet<(ActorId, ActorId)>,
     /// Settings of spawned objects (placed ones are in `level.actors`).
     extra: HashMap<ActorId, Actor>,
@@ -222,6 +320,7 @@ impl World {
                 e
             }));
         }
+        let camera = CutCamera::new(&level, &classes);
         Self {
             level,
             classes,
@@ -229,10 +328,55 @@ impl World {
             time: 0.0,
             outputs: Vec::new(),
             spawned: Vec::new(),
+            player: None,
+            camera,
+            fade: Fade::default(),
+            cut_mode: false,
+            lines: Box::new(NoLines),
+            puppets: HashMap::new(),
+            sequences: HashMap::new(),
             touching: HashSet::new(),
             extra: HashMap::new(),
             rng: 0x9E37_79B9_7F4A_7C15,
         }
+    }
+
+    /// The Harry placed in the level, which the original reuses as the player.
+    pub fn placed_harry(&self) -> Option<ActorId> {
+        self.actors
+            .iter()
+            .position(|e| e.as_ref().is_some_and(|e| self.classes.is_a(&e.class, "HPBase.baseHarry")))
+    }
+
+    /// The object with this name (letter case doesn't matter).
+    pub fn find_named(&self, name: &str) -> Option<ActorId> {
+        self.actors.iter().position(|e| e.as_ref().is_some_and(|e| e.name.eq_ignore_ascii_case(name)))
+    }
+
+    /// Tells the world how long the animations of object `id`'s mesh are.
+    pub fn set_sequences(&mut self, id: ActorId, list: impl IntoIterator<Item = (String, Sequence)>) {
+        let map = list.into_iter().map(|(n, s)| (n.to_ascii_lowercase(), s)).collect();
+        self.sequences.insert(id, map);
+    }
+
+    /// Whether object `id` can play animation `name`. Without known lengths any name goes.
+    pub(crate) fn has_anim(&self, id: ActorId, name: &str) -> bool {
+        !name.is_empty() && self.sequences.get(&id).is_none_or(|m| m.contains_key(&name.to_ascii_lowercase()))
+    }
+
+    pub(crate) fn sequence(&self, id: ActorId, name: &str) -> Option<Sequence> {
+        self.sequences.get(&id)?.get(&name.to_ascii_lowercase()).copied()
+    }
+
+    /// Whether a cutscene is driving this object right now (its own behaviour should wait).
+    pub fn puppet_busy(&self, id: ActorId) -> bool {
+        self.puppets.get(&id).is_some_and(Puppet::busy)
+    }
+
+    /// True once after a cutscene released this object back to its own behaviour, which should
+    /// then start over what it was doing.
+    pub fn take_restart(&mut self, id: ActorId) -> bool {
+        self.puppets.get_mut(&id).is_some_and(|p| std::mem::take(&mut p.restart))
     }
 
     pub fn spawn(&mut self, e: Entity) -> ActorId {
@@ -299,6 +443,8 @@ impl World {
             self.outputs.push(Output::AmbientStop { actor: id });
         }
         self.extra.remove(&id);
+        self.puppets.remove(&id);
+        self.sequences.remove(&id);
         self.touching.retain(|&(a, b)| a != id && b != id);
     }
 
@@ -373,8 +519,33 @@ impl World {
             if self.get(id).is_some_and(|e| e.behaviour.is_some()) {
                 self.with_behaviour(id, |b, w| b.tick(w, id, dt));
             }
+            if let Some(mut p) = self.puppets.remove(&id) {
+                let cue = if self.get(id).is_some() { p.tick(self, id, dt) } else { None };
+                self.puppets.insert(id, p);
+                self.send_cue(cue);
+            }
+            if self.camera.actor == Some(id) {
+                let cue = crate::cutscene::tick_camera(self, dt);
+                self.send_cue(cue);
+            }
         }
+        if self.camera.actor.is_none() {
+            let cue = crate::cutscene::tick_camera(self, dt);
+            self.send_cue(cue);
+        }
+        self.fade.tick(dt);
         self.update_touches();
+    }
+
+    /// Tells cutscene `to` that cue `cue` was given.
+    pub(crate) fn send_cue(&mut self, cue: Option<(ActorId, String)>) {
+        if let Some((to, cue)) = cue {
+            self.with_behaviour(to, |b, w| b.cue(w, to, &cue));
+        }
+    }
+
+    pub(crate) fn note(&mut self, text: String) {
+        self.outputs.push(Output::Note(text));
     }
 
     /// Sends touch / untouch to objects whose collision a pawn entered or left.

@@ -15,7 +15,7 @@ use hp1_engine::level_mesh::poly_flags;
 use hp1_engine::lighting::{LightSource, level_lights, vertex_light, zone_ambient};
 use hp1_engine::props::ActorProps;
 use hp1_engine::units::rotator_matrix;
-use hp1_engine::world::World;
+use hp1_engine::world::{Sequence, World};
 use hp1_render::{Blend, DrawBatch, Vertex};
 
 use crate::textures::Textures;
@@ -77,6 +77,36 @@ impl Actors {
     pub fn moving_count(&self) -> usize {
         self.moving.len()
     }
+
+    /// How long the animations of world object `id` are, if it is drawn with a skeletal mesh.
+    pub fn sequences(&self, id: usize) -> Option<Vec<(String, Sequence)>> {
+        self.moving.iter().find(|i| i.actor == Some(id)).and_then(lengths)
+    }
+
+    /// The same for the player's mesh.
+    pub fn player_sequences(&self) -> Option<Vec<(String, Sequence)>> {
+        self.player.as_ref().and_then(lengths)
+    }
+
+    /// Every world object drawn with an animated mesh.
+    pub fn animated(&self) -> Vec<usize> {
+        self.moving.iter().filter_map(|i| i.actor).collect()
+    }
+
+    /// Stops drawing world object `id` (the placed Harry, who is drawn as the player).
+    pub fn forget(&mut self, id: usize) {
+        self.moving.retain(|i| i.actor != Some(id));
+    }
+}
+
+fn lengths(inst: &Instance) -> Option<Vec<(String, Sequence)>> {
+    let Motion::Skeletal { anim, .. } = &inst.motion else { return None };
+    Some(
+        anim.sequences
+            .iter()
+            .map(|s| (s.info.name.clone(), Sequence { frames: s.info.frames, rate: s.info.rate }))
+            .collect(),
+    )
 }
 
 /// Mesh geometry ready for the renderer.

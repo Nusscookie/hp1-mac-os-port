@@ -1,8 +1,124 @@
-//! The standard follow camera (see `specs/engine/Camera.md`).
+//! The standard follow camera (see `specs/engine/Camera.md`) and the camera's cutscene mode
+//! (`specs/cutscenes/CutScene.md`).
 
 use glam::Vec3;
+use hp1_data::ClassTable;
+use hp1_data::level::LevelFile;
 
 use crate::collision::Collider;
+use crate::props::ActorProps;
+use crate::units::ROT_TO_RAD;
+use crate::world::ActorId;
+
+/// The camera's flying speed in cutscenes at `CAMSPEED 1`.
+pub const NORMAL_SPEED: f32 = 2.0;
+/// A camera move counts as done this close, unless `CAMPROX` says otherwise.
+pub const NORMAL_PROX: f32 = 15.0;
+
+/// What capturing the camera saves and releasing it gives back.
+#[derive(Clone, Debug)]
+pub(crate) struct SavedCamera {
+    pub speed: f32,
+    pub rate: [f32; 3],
+    pub position: Option<ActorId>,
+    pub direction: Option<ActorId>,
+    /// Where it was relative to Harry, and Harry's facing then.
+    pub offset: Vec3,
+    pub harry_yaw: i32,
+    pub rot: [i32; 3],
+    pub desired: [i32; 3],
+}
+
+/// The player's camera as cutscenes see it. Outside cutscene mode the follow camera moves it
+/// and the program keeps `pos` and `rot` up to date.
+#[derive(Clone, Debug)]
+pub struct CutCamera {
+    /// The camera object in the level (HP1 `BaseCam`), if placed.
+    pub actor: Option<ActorId>,
+    /// In cutscene mode: the cutscene places and turns the camera.
+    pub active: bool,
+    pub pos: Vec3,
+    /// Pitch, yaw, roll in rotation units.
+    pub rot: [i32; 3],
+    pub(crate) desired: [i32; 3],
+    pub(crate) speed: f32,
+    /// Turning speed (pitch, yaw, roll) and its normal value.
+    pub(crate) rate: [f32; 3],
+    pub(crate) normal_rate: [f32; 3],
+    /// Where it flies to and what it looks at.
+    pub(crate) position: Option<ActorId>,
+    pub(crate) direction: Option<ActorId>,
+    pub(crate) prox: f32,
+    /// The cutscene and cue to tell when it reaches `position`.
+    pub(crate) notify: Option<(ActorId, String)>,
+    pub(crate) stack: Vec<SavedCamera>,
+    /// Set when it leaves cutscene mode, for the follow camera to carry on from here.
+    pub left: bool,
+}
+
+impl CutCamera {
+    pub fn new(level: &LevelFile, classes: &ClassTable) -> Self {
+        let placed = level.actors.iter().enumerate().find_map(|(i, a)| {
+            let a = a.as_ref()?;
+            classes.is_a(&a.class, "HPBase.BaseCam").then(|| (i, ActorProps::new(a, classes)))
+        });
+        let rate = placed.as_ref().map_or([20000; 3], |(_, p)| p.rotator("RotationRate")).map(|r| r as f32);
+        Self {
+            actor: placed.as_ref().map(|(i, _)| *i),
+            active: false,
+            pos: placed.as_ref().map_or(Vec3::ZERO, |(_, p)| Vec3::from(p.vec3("Location"))),
+            rot: [0; 3],
+            desired: [0; 3],
+            speed: NORMAL_SPEED,
+            rate,
+            normal_rate: rate,
+            position: None,
+            direction: None,
+            prox: NORMAL_PROX,
+            notify: None,
+            stack: Vec::new(),
+            left: false,
+        }
+    }
+
+    /// Where it looks from and to.
+    pub fn view(&self) -> View {
+        let (pitch, yaw) = (self.rot[0] as f32 * ROT_TO_RAD, self.rot[1] as f32 * ROT_TO_RAD);
+        let dir = Vec3::new(pitch.cos() * yaw.cos(), pitch.cos() * yaw.sin(), pitch.sin());
+        View { pos: self.pos, target: self.pos + dir * 100.0 }
+    }
+
+    /// The follow camera's place and aim, while not in cutscene mode.
+    pub fn follow(&mut self, view: View) {
+        self.pos = view.pos;
+        self.rot = rotation_towards(view.target - view.pos);
+        self.desired = self.rot;
+    }
+}
+
+/// The facing that looks along `v` (pitch, yaw, roll), as the original engine works it out.
+pub fn rotation_towards(v: Vec3) -> [i32; 3] {
+    let scale = 65536.0 / std::f32::consts::TAU;
+    let yaw = (v.y.atan2(v.x) * scale) as i32;
+    let pitch = (v.z.atan2(v.truncate().length()) * scale) as i32;
+    [pitch, yaw, 0]
+}
+
+/// Turns `from` towards `to` the short way by at most `speed` (rotation units, 0..65535).
+pub fn turn_shortest(from: i32, to: i32, speed: i32) -> i32 {
+    let (from, to) = (from & 0xffff, to & 0xffff);
+    if from > to {
+        if from - to < 0x8000 {
+            (from - (from - to).min(speed)) & 0xffff
+        } else {
+            (from + (to + 0x10000 - from).min(speed)) & 0xffff
+        }
+    } else if to - from < 0x8000 {
+        (from + (to - from).min(speed)) & 0xffff
+    } else {
+        (from - (from + 0x10000 - to).min(speed)) & 0xffff
+    }
+}
 
 pub struct FollowCamera {
     pub pos: Vec3,

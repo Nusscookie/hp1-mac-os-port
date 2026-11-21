@@ -26,7 +26,7 @@ use hp1_engine::level_mesh::{LightPacker, build_model_mesh};
 use hp1_engine::lighting::build_level_light_maps;
 use hp1_engine::props::ActorProps;
 use hp1_engine::units::{ROT_TO_RAD, rotator_matrix};
-use hp1_engine::world::{Entity, World};
+use hp1_engine::world::{Entity, Output, World};
 use hp1_platform::sdl3::event::{Event, WindowEvent};
 use hp1_platform::sdl3::keyboard::{Keycode, Scancode};
 use hp1_render::{DrawBatch, Geometry, Gpu, Image, Scene, SceneDesc, Vertex, WorldRenderer, wgpu};
@@ -138,7 +138,7 @@ struct Loaded {
     animations: Vec<textures::Animation>,
     fires: Vec<textures::FireTexture>,
     movers: movers::Movers,
-    /// Whether Harry is drawn (walking mode).
+    /// Whether Harry is drawn (walking mode, or the level has its own Harry).
     show_player: bool,
     /// The running level (it owns the level data and class table).
     world: World,
@@ -273,6 +273,11 @@ fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
 fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &mut Loaded, time: f32) {
     let spawned = std::mem::take(&mut l.world.spawned);
     l.actors.follow(&l.world, &spawned);
+    for &id in &spawned {
+        if let Some(list) = l.actors.sequences(id) {
+            l.world.set_sequences(id, list);
+        }
+    }
     let moving = l.actors.build_moving(time);
     scene.geometry[2].update(gpu, &moving.vertices, &moving.indices, moving.batches);
     if let Some((v, i, b)) = l.movers.build_if_moved(&l.world) {
@@ -295,7 +300,69 @@ fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &mut Loaded, time: f32) {
 
 fn pose_player(l: &mut Loaded, p: &player::Player) {
     l.show_player = true;
-    l.actors.pose_player(&l.world.level, &l.world.classes, p.body.pos, p.yaw, p.anim, p.anim_time);
+    l.actors.pose_player(&l.world.level, &l.world.classes, p.body.pos, p.yaw, &p.anim, p.anim_time);
+}
+
+/// Shows Harry where the world has him (not walking: standing, or driven by a cutscene).
+fn pose_from_world(l: &mut Loaded, harry: usize) {
+    let Some(e) = l.world.get(harry) else { return };
+    let (pos, yaw) = (e.pos, e.rot[1] as f32 * ROT_TO_RAD);
+    let (anim, time) = e.anim.as_ref().map_or(("breath".to_owned(), 0.0), |a| (a.name.clone(), a.time));
+    l.show_player = true;
+    l.actors.pose_player(&l.world.level, &l.world.classes, pos, yaw, &anim, time);
+}
+
+/// Prints what the world says (subtitles, level changes, script problems) and the cutscene
+/// mode switching; sounds are left for the sound code.
+fn report(world: &mut World, cut_mode: &mut bool) {
+    world.outputs.retain(|o| match o {
+        Output::Message { text, seconds } => {
+            println!("[{seconds:.1} s] {text}");
+            false
+        }
+        Output::ChangeLevel { map } => {
+            println!("cutscene: go to level {map}");
+            false
+        }
+        Output::Note(n) => {
+            eprintln!("{n}");
+            false
+        }
+        _ => true,
+    });
+    if world.cut_mode != *cut_mode {
+        *cut_mode = world.cut_mode;
+        println!("cutscene mode {}", if world.cut_mode { "on" } else { "off" });
+    }
+}
+
+/// One frame of the player's view: walking (input unless a cutscene has Harry), and the
+/// cutscene camera over everything while it is active.
+fn walk_frame(
+    world: &mut World,
+    p: &mut player::Player,
+    harry: usize,
+    input: glam::Vec2,
+    jump: bool,
+    dt: f32,
+) -> hp1_engine::camera::View {
+    if std::mem::take(&mut world.camera.left) {
+        p.cam.pos = world.camera.pos;
+    }
+    let view = if world.puppet_busy(harry) {
+        p.follow_world(world, harry, dt)
+    } else {
+        if world.take_restart(harry) {
+            p.adopt(world, harry);
+        }
+        p.step(world, harry, input, jump, dt)
+    };
+    if world.camera.active {
+        world.camera.view()
+    } else {
+        world.camera.follow(view);
+        view
+    }
 }
 
 fn main() -> Result<()> {
@@ -306,42 +373,92 @@ fn main() -> Result<()> {
         camera = Camera { pos: Vec3::new(x, y, z), yaw: yaw.to_radians(), pitch: pitch.to_radians() };
     }
     let mut loaded = Loaded { start: Camera { pos: Vec3::ZERO, yaw: 0.0, pitch: 0.0 }, ..loaded };
-    // Harry in the world, so triggers notice him (flying or walking).
-    let harry = loaded.world.spawn(Entity::pawn("Harry", "HarryPotter.Harry", camera.pos, 15.0, 42.0, true));
+    // A stand-in for Harry that follows the flying camera, so triggers notice it.
+    let ghost = loaded.world.spawn(Entity::pawn("Harry", "HarryPotter.Harry", camera.pos, 15.0, 42.0, true));
+    // The level's own Harry is the player, as in the original (its cutscenes name him).
+    let harry = match loaded.world.placed_harry() {
+        Some(id) => {
+            if let Some(e) = loaded.world.get_mut(id) {
+                (e.is_pawn, e.is_player, e.collide_actors) = (true, true, true);
+            }
+            loaded.actors.forget(id);
+            loaded.show_player = true;
+            id
+        }
+        None => ghost,
+    };
+    loaded.world.player = Some(harry);
+    for id in loaded.actors.animated() {
+        if let Some(list) = loaded.actors.sequences(id) {
+            loaded.world.set_sequences(id, list);
+        }
+    }
+    if let Some(list) = loaded.actors.player_sequences() {
+        loaded.world.set_sequences(harry, list);
+    }
+    loaded.world.lines = Box::new(sound::DialogLines::open(&args.data)?);
+    let mut cut_mode = false;
 
     if let Some(out) = &args.shot {
         let gpu = Gpu::new(hp1_render::create_instance(), None).map_err(|e| anyhow!(e))?;
-        let renderer = WorldRenderer::new(&gpu, wgpu::TextureFormat::Rgba8Unorm);
+        let mut renderer = WorldRenderer::new(&gpu, wgpu::TextureFormat::Rgba8Unorm);
         let mut scene = upload(&gpu, &renderer, &loaded);
         for tag in &args.trigger {
             loaded.world.trigger_event(tag, None);
         }
-        for _ in 0..(args.run * 60.0) as usize {
+        let mut walker = args.walk.then(|| {
+            let start = if harry == ghost || args.camera.is_some() {
+                camera.pos - Vec3::Z * player::EYE
+            } else {
+                loaded.world.get(harry).map_or(camera.pos, |e| e.pos)
+            };
+            if harry != ghost
+                && let Some(e) = loaded.world.get_mut(ghost)
+            {
+                e.pos = Vec3::splat(1.0e6);
+            }
+            player::Player::new(&loaded.world, harry, start, camera.yaw)
+        });
+        let frames = (args.run * 60.0) as usize + if args.walk { 60 } else { 0 };
+        for _ in 0..frames {
             loaded.world.tick(1.0 / 60.0);
+            if let Some(p) = &mut walker {
+                camera = Camera::looking(walk_frame(
+                    &mut loaded.world,
+                    p,
+                    harry,
+                    glam::Vec2::ZERO,
+                    false,
+                    1.0 / 60.0,
+                ));
+            } else if loaded.world.camera.active {
+                camera = Camera::looking(loaded.world.camera.view());
+            }
+            report(&mut loaded.world, &mut cut_mode);
+            loaded.world.outputs.retain(|o| !matches!(o, Output::Voice { .. }));
         }
         for o in loaded.world.outputs.drain(..) {
             println!("world: {o:?}");
+        }
+        if loaded.world.camera.active {
+            camera = Camera::looking(loaded.world.camera.view());
+            println!("cutscene camera at {:.0}", camera.pos);
         }
         for e in loaded.world.actors.iter().flatten().filter(|e| e.anim.is_some()) {
             let a = e.anim.as_ref().map_or("", |a| a.name.as_str());
             println!("character {} ({}) at {:.0} playing {a}", e.name, e.class, e.pos);
         }
-        if args.walk {
-            let mut p =
-                player::Player::new(&loaded.world, harry, camera.pos - Vec3::Z * player::EYE, camera.yaw);
-            let mut view = None;
-            for _ in 0..60 {
-                loaded.world.tick(1.0 / 60.0);
-                view = Some(p.step(&mut loaded.world, harry, glam::Vec2::ZERO, false, 1.0 / 60.0));
+        match &walker {
+            Some(p) if !loaded.world.puppet_busy(harry) => {
+                pose_player(&mut loaded, p);
+                println!("Harry stands at {:?}, playing {}", p.body.pos, p.anim);
             }
-            if let Some(v) = view {
-                camera = Camera::looking(v);
-            }
-            pose_player(&mut loaded, &p);
-            println!("Harry stands at {:?}, playing {}", p.body.pos, p.anim);
+            _ if loaded.show_player => pose_from_world(&mut loaded, harry),
+            _ => {}
         }
         update_moving(&gpu, &mut scene, &mut loaded, args.run.max(1.0));
         let (w, h) = args.size;
+        renderer.brightness = loaded.world.fade.brightness();
         let img = hp1_render::render_offscreen(
             &gpu,
             &renderer,
@@ -404,7 +521,7 @@ fn main() -> Result<()> {
     config.format = format;
     config.present_mode = wgpu::PresentMode::AutoVsync;
     surface.configure(&gpu.device, &config);
-    let renderer = WorldRenderer::new(&gpu, format);
+    let mut renderer = WorldRenderer::new(&gpu, format);
     let mut scene = upload(&gpu, &renderer, &loaded);
     let mut depth = hp1_render::create_depth(&gpu, width, height);
 
@@ -457,14 +574,21 @@ fn main() -> Result<()> {
                 Event::KeyDown { keycode: Some(Keycode::F), repeat: false, .. } => {
                     walker = match walker {
                         Some(_) => None,
-                        None => Some(player::Player::new(
-                            &loaded.world,
-                            harry,
-                            camera.pos - Vec3::Z * player::EYE,
-                            camera.yaw,
-                        )),
+                        None => {
+                            // Walk from where the level's Harry is; without one, from the camera.
+                            let start = match loaded.world.get(harry) {
+                                Some(e) if harry != ghost => e.pos,
+                                _ => camera.pos - Vec3::Z * player::EYE,
+                            };
+                            if harry != ghost
+                                && let Some(e) = loaded.world.get_mut(ghost)
+                            {
+                                e.pos = Vec3::splat(1.0e6);
+                            }
+                            Some(player::Player::new(&loaded.world, harry, start, camera.yaw))
+                        }
                     };
-                    loaded.show_player = walker.is_some();
+                    loaded.show_player = walker.is_some() || harry != ghost;
                     println!("{}", if walker.is_some() { "walking" } else { "flying" });
                 }
                 Event::KeyDown { keycode: Some(Keycode::Space), repeat: false, .. } => jump = true,
@@ -515,16 +639,21 @@ fn main() -> Result<()> {
                 pressed(Scancode::W) - pressed(Scancode::S),
                 pressed(Scancode::D) - pressed(Scancode::A),
             );
-            let view = p.step(world, harry, input, jump, dt);
-            camera = Camera::looking(view);
+            camera = Camera::looking(walk_frame(world, p, harry, input, jump, dt));
+        } else if world.camera.active {
+            camera = Camera::looking(world.camera.view());
         } else {
+            world.camera.left = false;
             let speed = if keys.is_scancode_pressed(Scancode::LShift) { 2400.0 } else { 600.0 };
             camera.pos += wish.normalize_or_zero() * speed * dt;
-            if let Some(e) = world.get_mut(harry) {
+            if let Some(e) = world.get_mut(ghost) {
                 e.pos = camera.pos - Vec3::Z * player::EYE;
             }
+            let (fwd, ..) = camera.axes();
+            world.camera.follow(hp1_engine::camera::View { pos: camera.pos, target: camera.pos + fwd });
         }
         jump = false;
+        report(world, &mut cut_mode);
         if args.mute {
             world.outputs.clear();
         } else {
@@ -544,9 +673,12 @@ fn main() -> Result<()> {
                 continue;
             }
         };
-        if let Some(p) = &walker {
-            pose_player(&mut loaded, p);
+        match &walker {
+            Some(p) if !loaded.world.puppet_busy(harry) => pose_player(&mut loaded, p),
+            _ if loaded.show_player => pose_from_world(&mut loaded, harry),
+            _ => {}
         }
+        renderer.brightness = loaded.world.fade.brightness();
         update_moving(&gpu, &mut scene, &mut loaded, started.elapsed().as_secs_f32());
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());

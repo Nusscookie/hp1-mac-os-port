@@ -22,6 +22,8 @@ pub fn make(class: &str, p: &ActorProps, classes: &ClassTable) -> Option<Box<dyn
         Some(Box::new(Counter { left: p.byte("NumToCount", 2) as u32 }))
     } else if is("Engine.MusicEvent") {
         Some(Box::new(MusicEvent::new(p)))
+    } else if is("HPBase.CutScene") {
+        Some(Box::new(crate::cutscene::CutScene::new(p)))
     } else if is("HPBase.baseChar") && p.bool("bFollowPatrolPoints") && !p.bool("bHidden") {
         Some(Box::new(crate::character::Character::new(p)))
     } else {
@@ -569,7 +571,12 @@ pub(crate) mod tests {
                 "Engine.PatrolPoint": {"parent": "Engine.NavigationPoint", "defaults": {}},
                 "Engine.Pawn": {"parent": "Engine.Actor", "defaults": {}},
                 "HPBase.baseChar": {"parent": "Engine.Pawn", "defaults": {}},
-                "HPBase.TriggerSpwnBsChrOnPPnt": {"parent": "Engine.Trigger", "defaults": {}}
+                "HPBase.TriggerSpwnBsChrOnPPnt": {"parent": "Engine.Trigger", "defaults": {}},
+                "HPBase.baseHarry": {"parent": "Engine.Pawn", "defaults": {"GroundSpeed": 200.0}},
+                "HPBase.BaseCam": {"parent": "Engine.Pawn", "defaults": {"RotationRate": {"pitch": 20000, "yaw": 20000, "roll": 20000}}},
+                "HPBase.CutMark": {"parent": "Engine.NavigationPoint", "defaults": {}},
+                "HPBase.baseScript": {"parent": "Engine.Actor", "defaults": {}},
+                "HPBase.CutScene": {"parent": "HPBase.baseScript", "defaults": {"bCanPlay": true, "bPlayOnce": true, "bTouchStarts": true, "bTriggerStarts": true}}
             }}"#,
         )
         .unwrap();

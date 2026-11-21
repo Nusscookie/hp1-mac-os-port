@@ -261,6 +261,15 @@ pub fn move_box(c: &(impl Collider + ?Sized), pos: Vec3, delta: Vec3, extent: Ve
     }
 }
 
+/// The engine's smooth move: as far as the box gets, then along the surface it hit for what is
+/// left, unless that would turn it backwards (as in SurrealEngine's re-implementation).
+pub fn move_smooth(c: &(impl Collider + ?Sized), pos: Vec3, delta: Vec3, extent: Vec3) -> Vec3 {
+    let (p, hit) = move_box(c, pos, delta, extent);
+    let Some(h) = hit else { return p };
+    let along = (delta - h.normal * delta.dot(h.normal)) * (1.0 - h.time);
+    if delta.dot(along) >= 0.0 { move_box(c, p, along, extent).0 } else { p }
+}
+
 /// The nearest place to `pos` where the box is free: first straight up (up to `up`), then in rings
 /// around. None if there is no room nearby.
 pub fn find_spot(c: &(impl Collider + ?Sized), pos: Vec3, extent: Vec3, up: f32) -> Option<Vec3> {

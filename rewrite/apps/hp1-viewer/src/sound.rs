@@ -143,6 +143,61 @@ pub fn play_outputs(
                 }
                 None => m.stop_music(),
             },
+            // A new dialogue voice cuts off the one before.
+            Output::Voice { path } => {
+                if let Some(c) = lib.clip(&path, false) {
+                    let id = m.play(&c, Placement::Flat, 1.0, 1.0, false);
+                    if let Some(old) = ambient.insert(VOICE, id) {
+                        m.stop(old);
+                    }
+                }
+            }
+            Output::Message { .. } | Output::ChangeLevel { .. } | Output::Note(_) => {}
         }
+    }
+}
+
+/// Where the dialogue voice is kept among the looping sounds.
+const VOICE: usize = usize::MAX;
+
+/// Dialogue for the world: text in the game's language, voices from `AllDialog`.
+pub struct DialogLines {
+    text: HashMap<String, String>,
+    sounds: Library,
+}
+
+impl DialogLines {
+    pub fn open(data: &Path) -> Result<Self> {
+        let text_dir = data.join("text");
+        // The language the game is set to (`[Engine.Engine] Language`), else the default text.
+        let lang = std::fs::read(text_dir.join("default.ini.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v["Engine.Engine"]["Language"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "int".into());
+        let read = |ext: &str| -> Option<HashMap<String, String>> {
+            let bytes = std::fs::read(text_dir.join(format!("hpdialog.{ext}.json"))).ok()?;
+            let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            let all = v.get("all")?.as_object()?;
+            Some(
+                all.iter()
+                    .filter_map(|(k, v)| Some((k.to_ascii_lowercase(), v.as_str()?.to_owned())))
+                    .collect(),
+            )
+        };
+        let text = read(&lang).or_else(|| read("int")).unwrap_or_default();
+        Ok(Self { text, sounds: Library::open(data)? })
+    }
+}
+
+impl hp1_engine::dialog::Lines for DialogLines {
+    fn text(&self, id: &str) -> String {
+        self.text.get(&id.to_ascii_lowercase()).cloned().unwrap_or_default()
+    }
+
+    fn voice(&mut self, id: &str) -> Option<(String, f32)> {
+        let path = format!("AllDialog.{id}");
+        let clip = self.sounds.clip(&path, false)?;
+        Some((path, clip.seconds()))
     }
 }

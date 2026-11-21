@@ -12,7 +12,7 @@ mod textures;
 use std::path::{Path, PathBuf};
 
 use hp1_data::{DataValue, FORMAT_VERSION, Manifest, PropMap};
-use ue1_read::{Library, Package, Props, Value};
+use ue1_read::{Library, Package, Props, Reader, Value};
 
 pub use audio::convert_audio;
 pub use classes::convert_classes;
@@ -89,14 +89,33 @@ pub fn data_value(pkg: &Package, v: &Value) -> DataValue {
 }
 
 pub fn prop_map(pkg: &Package, props: &Props) -> PropMap {
-    props
-        .iter()
-        .map(|p| {
-            let key =
-                if p.array_index == 0 { p.name.clone() } else { format!("{}[{}]", p.name, p.array_index) };
-            (key, data_value(pkg, &p.value))
-        })
-        .collect()
+    let mut out = PropMap::new();
+    for p in props.iter() {
+        let key = if p.array_index == 0 { p.name.clone() } else { format!("{}[{}]", p.name, p.array_index) };
+        if let Value::Struct(name, raw) = &p.value
+            && let Some((actor, alias)) = cut_entry(pkg, &name[..], &raw[..])
+        {
+            // HP1 cutscene cast and place lists: an object and the name the script calls it by.
+            out.insert(format!("{key}.actor"), actor);
+            out.insert(format!("{key}.alias"), DataValue::Str(alias));
+            continue;
+        }
+        out.insert(key, data_value(pkg, &p.value));
+    }
+    out
+}
+
+/// A cutscene's `CutCast` or `CutLoc` entry: an object reference followed by its alias (the
+/// rest of `CutCast` is the script's running state, which is not kept).
+fn cut_entry(pkg: &Package, name: &str, raw: &[u8]) -> Option<(DataValue, String)> {
+    if !name.eq_ignore_ascii_case("CutCast") && !name.eq_ignore_ascii_case("CutLoc") {
+        return None;
+    }
+    let mut r = Reader::new(raw);
+    let obj = ue1_read::ObjRef::from_raw(r.index().ok()?);
+    let alias = r.string().ok()?;
+    let actor = if obj.is_none() { DataValue::Null } else { DataValue::Str(pkg.ref_path(obj)) };
+    Some((actor, alias))
 }
 
 fn hex(raw: &[u8]) -> String {

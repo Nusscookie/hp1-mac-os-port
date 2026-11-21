@@ -41,6 +41,8 @@ enum State {
         timer: f32,
     },
     Pause {
+        /// The point it pauses at.
+        at: usize,
         left: f32,
         next: Option<usize>,
     },
@@ -73,6 +75,9 @@ pub struct Character {
     yaw: f32,
     want_yaw: f32,
     anim: Animation,
+    /// Position and facing last written to the object, to notice when something else (a
+    /// cutscene) moved or turned it.
+    synced: Option<(Vec3, i32)>,
 }
 
 /// Shortest signed turn from `a` to `b`, in rotation units.
@@ -113,14 +118,15 @@ impl Character {
             state: State::Start,
             yaw,
             want_yaw: yaw,
-            anim: Animation { name: p.text("AnimSequence"), time: 0.0 },
+            anim: Animation::looping(&p.text("AnimSequence")),
+            synced: None,
         }
     }
 
     /// Loops an animation. Like the original, a missing name keeps the current one.
     fn play(&mut self, name: &str) {
         if !name.is_empty() && !self.anim.name.eq_ignore_ascii_case(name) {
-            self.anim = Animation { name: name.to_owned(), time: 0.0 };
+            self.anim = Animation::looping(name);
         }
     }
 
@@ -184,14 +190,51 @@ impl Character {
             return;
         }
         if p.pause > 0.0 {
-            self.state = State::Pause { left: p.pause, next };
-            self.play(&p.pause_anim);
-            if p.look {
-                self.want_yaw = p.rot[1] as f32;
-            }
+            self.pause(at, next);
         } else {
             self.go(next);
         }
+    }
+
+    fn pause(&mut self, at: usize, next: Option<usize>) {
+        let p = &self.net.points[at];
+        let (left, anim, look, yaw) = (p.pause, p.pause_anim.clone(), p.look, p.rot[1] as f32);
+        self.state = State::Pause { at, left, next };
+        self.play(&anim);
+        if look {
+            self.want_yaw = yaw;
+        }
+    }
+
+    /// Back from a cutscene: what it was doing starts over from its beginning, from where the
+    /// cutscene left it.
+    fn restart(&mut self, w: &World, me: ActorId) {
+        self.adopt(w, me);
+        match self.state {
+            State::Start => {}
+            State::Walk { to, .. } => {
+                let walk = self.walk_anim.clone();
+                self.play(&walk);
+                self.go(Some(to));
+            }
+            State::Pause { at, next, .. } => self.pause(at, next),
+            State::Idle { .. } => self.go(None),
+        }
+    }
+
+    /// Takes the object's position, facing and animation as its own.
+    fn adopt(&mut self, w: &World, me: ActorId) {
+        let Some(e) = w.get(me) else { return };
+        if let Some(b) = &mut self.body {
+            b.pos = e.pos;
+            b.vel = Vec3::ZERO;
+        }
+        self.yaw = e.rot[1] as f32;
+        self.want_yaw = self.yaw;
+        if let Some(a) = &e.anim {
+            self.anim = a.clone();
+        }
+        self.synced = Some((e.pos, e.rot[1]));
     }
 
     fn walk(&mut self, w: &mut World, me: ActorId, dt: f32) {
@@ -263,7 +306,7 @@ impl Character {
     }
 
     /// Writes position, facing and animation back to the object.
-    fn sync(&self, w: &mut World, me: ActorId) {
+    fn sync(&mut self, w: &mut World, me: ActorId) {
         let Some(e) = w.get_mut(me) else { return };
         if let Some(b) = self.body {
             e.pos = b.pos;
@@ -271,6 +314,7 @@ impl Character {
         }
         e.rot = [0, self.yaw.round() as i32, 0];
         e.anim = Some(self.anim.clone());
+        self.synced = Some((e.pos, e.rot[1]));
     }
 }
 
@@ -279,6 +323,20 @@ impl Behaviour for Character {
         let dt = dt.min(MAX_DT);
         if self.state == State::Start {
             self.start(w, me);
+        }
+        // A cutscene has it.
+        if w.puppet_busy(me) {
+            return;
+        }
+        if w.take_restart(me) {
+            self.restart(w, me);
+        } else if let Some(e) = w.get(me)
+            && self.synced.is_some_and(|s| s != (e.pos, e.rot[1]))
+        {
+            // Teleported or turned by a cutscene.
+            let anim = self.anim.clone();
+            self.adopt(w, me);
+            self.anim = anim;
         }
         // Ride whatever it stands on.
         if let Some(b) = &mut self.body
@@ -289,10 +347,10 @@ impl Behaviour for Character {
         match self.state {
             State::Start => {}
             State::Walk { .. } => self.walk(w, me, dt),
-            State::Pause { left, next } => {
+            State::Pause { at, left, next } => {
                 self.stand(w, me, dt);
                 if left > dt {
-                    self.state = State::Pause { left: left - dt, next };
+                    self.state = State::Pause { at, left: left - dt, next };
                 } else {
                     // Back to patrolling, which starts with the walk animation.
                     let walk = self.walk_anim.clone();
