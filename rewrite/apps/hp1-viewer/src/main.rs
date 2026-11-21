@@ -1,6 +1,6 @@
 //! Fly through a converted map.
 //!
-//!   hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH]
+//!   hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--view x,y,z,yaw,pitch] [--size WxH]
 //!              [--music <name>] [--mute] [--trigger <tag>] [--run <seconds>]
 //!
 //! Mouse looks around, WASD moves, Q/E go down/up, Shift is faster, C prints the camera (for
@@ -11,6 +11,7 @@
 mod actors;
 mod hud;
 mod movers;
+mod particles;
 mod player;
 mod sound;
 mod textures;
@@ -38,6 +39,8 @@ struct Args {
     map: String,
     shot: Option<PathBuf>,
     camera: Option<[f32; 5]>,
+    /// Shot mode: where the picture is taken from at the end, whatever the game did.
+    view: Option<[f32; 5]>,
     size: (u32, u32),
     music: Option<String>,
     mute: bool,
@@ -56,6 +59,7 @@ fn parse_args() -> Result<Args> {
         map,
         shot: None,
         camera: None,
+        view: None,
         size: (1280, 800),
         music: None,
         mute: false,
@@ -78,9 +82,10 @@ fn parse_args() -> Result<Args> {
             "--music" => args.music = Some(v),
             "--trigger" => args.trigger.push(v),
             "--run" => args.run = v.parse()?,
-            "--camera" => {
+            "--camera" | "--view" => {
                 let n: Vec<f32> = v.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
-                args.camera = Some(n.try_into().map_err(|_| anyhow!("--camera wants 5 numbers"))?);
+                let n: [f32; 5] = n.try_into().map_err(|_| anyhow!("{a} wants 5 numbers"))?;
+                if a == "--camera" { args.camera = Some(n) } else { args.view = Some(n) }
             }
             "--size" => {
                 let (w, h) = v.split_once('x').context("--size wants WxH")?;
@@ -135,6 +140,7 @@ impl Camera {
 }
 
 struct Loaded {
+    particles: particles::ParticleDraw,
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     batches: Vec<DrawBatch>,
@@ -207,6 +213,7 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
     if !actors.load_player(data, &level, &classes, &mut textures, "HarryPotter.Harry")? {
         eprintln!("Harry's mesh is missing; walking mode shows no character");
     }
+    let particles = particles::ParticleDraw::load(&level, &classes, &mut textures);
     let animations = textures.animations();
     let mut fires = textures.fires();
     if !fires.is_empty() {
@@ -237,6 +244,7 @@ fn load(data: &Path, map: &str) -> Result<Loaded> {
         t.elapsed()
     );
     Ok(Loaded {
+        particles,
         vertices,
         indices,
         batches,
@@ -271,9 +279,16 @@ fn upload(gpu: &Gpu, renderer: &WorldRenderer, l: &Loaded) -> Scene {
     let moving = l.actors.build_moving(0.0);
     scene.geometry.push(Geometry::new(gpu, &moving.vertices, &moving.indices, moving.batches));
     scene.geometry.push(Geometry::new(gpu, &[], &[], Vec::new()));
-    // Slot 4: Harry.
+    // Slot 4: Harry; slot 5: particles.
+    scene.geometry.push(Geometry::new(gpu, &[], &[], Vec::new()));
     scene.geometry.push(Geometry::new(gpu, &[], &[], Vec::new()));
     scene
+}
+
+/// Rebuilds the particles for the view.
+fn update_particles(gpu: &Gpu, scene: &mut Scene, l: &Loaded, view: &hp1_engine::camera::View) {
+    let built = l.particles.build(&l.world, view);
+    scene.geometry[5].update(gpu, &built.vertices, &built.indices, built.batches);
 }
 
 fn update_moving(gpu: &Gpu, scene: &mut Scene, l: &mut Loaded, time: f32) {
@@ -469,7 +484,13 @@ fn main() -> Result<()> {
             _ if loaded.show_player => pose_from_world(&mut loaded, harry),
             _ => {}
         }
+        if let Some([x, y, z, yaw, pitch]) = args.view {
+            camera = Camera { pos: Vec3::new(x, y, z), yaw: yaw.to_radians(), pitch: pitch.to_radians() };
+        }
         update_moving(&gpu, &mut scene, &mut loaded, args.run.max(1.0));
+        update_particles(&gpu, &mut scene, &loaded, &camera.view());
+        let alive: usize = loaded.world.particles.values().map(|s| s.particles.len()).sum();
+        println!("{} particle systems, {alive} particles", loaded.world.particles.len());
         let (w, h) = args.size;
         renderer.brightness = loaded.world.fade.brightness();
         let img = hp1_render::render_offscreen(
@@ -696,6 +717,7 @@ fn main() -> Result<()> {
         }
         renderer.brightness = loaded.world.fade.brightness();
         update_moving(&gpu, &mut scene, &mut loaded, started.elapsed().as_secs_f32());
+        update_particles(&gpu, &mut scene, &loaded, &camera.view());
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         let sky = loaded.sky_origin.map(|o| camera.from(o).view_proj(width, height));

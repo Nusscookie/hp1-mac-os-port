@@ -169,6 +169,11 @@ impl DataValue {
             _ => None,
         }
     }
+    /// The raw bytes of a struct kept as hex.
+    pub fn struct_bytes(&self) -> Option<Vec<u8>> {
+        let DataValue::Struct { hex, .. } = self else { return None };
+        (0..hex.len() / 2).map(|i| u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()).collect()
+    }
     pub fn as_rotator(&self) -> Option<[i32; 3]> {
         match *self {
             DataValue::Rotator { pitch, yaw, roll } => Some([pitch, yaw, roll]),

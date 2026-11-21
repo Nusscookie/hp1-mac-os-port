@@ -334,6 +334,10 @@ pub struct World {
     pub stats: Stats,
     /// Where the player looks from, set by the program each frame (for things flying to the HUD).
     pub view: Option<crate::camera::View>,
+    /// Particle systems of `ParticleFX` objects.
+    pub particles: HashMap<ActorId, crate::particles::System>,
+    /// Gravity in zones (the default zone's; per-zone values are not read yet).
+    zone_gravity: Vec3,
     /// Characters and Harry while cutscenes drive them.
     pub(crate) puppets: HashMap<ActorId, Puppet>,
     /// Animation lengths per object, by lower-case sequence name (from the program's meshes).
@@ -347,14 +351,23 @@ pub struct World {
 impl World {
     pub fn new(level: LevelFile, classes: ClassTable) -> Self {
         let mut actors = Vec::with_capacity(level.actors.len());
-        for a in &level.actors {
+        let mut particles = HashMap::new();
+        for (id, a) in level.actors.iter().enumerate() {
             actors.push(a.as_ref().map(|a| {
                 let p = ActorProps::new(a, &classes);
                 let mut e = Entity::from_props(&a.name, &a.class, &p, a.brush.clone());
                 e.behaviour = crate::behaviours::make(&a.class, &p, &classes);
+                if classes.is_a(&a.class, "Engine.ParticleFX") {
+                    particles.insert(id, crate::particles::System::from_props(&p, id as u64 + 1));
+                }
                 e
             }));
         }
+        let zone_gravity = classes
+            .effective_defaults("Engine.ZoneInfo")
+            .get("ZoneGravity")
+            .and_then(hp1_data::DataValue::as_vec3)
+            .map_or(Vec3::new(0.0, 0.0, -950.0), Vec3::from);
         let camera = CutCamera::new(&level, &classes);
         let harry_class = level
             .actors
@@ -380,6 +393,8 @@ impl World {
             trace_cutscenes: false,
             stats,
             view: None,
+            particles,
+            zone_gravity,
             puppets: HashMap::new(),
             sequences: HashMap::new(),
             touching: HashSet::new(),
@@ -449,9 +464,17 @@ impl World {
                 return None;
             }
             e.behaviour = crate::behaviours::make(&actor.class, &p, &self.classes);
-            e
+            let system = self
+                .classes
+                .is_a(&actor.class, "Engine.ParticleFX")
+                .then(|| crate::particles::System::from_props(&p, self.actors.len() as u64 + 1));
+            (e, system)
         };
+        let (e, system) = e;
         let id = self.spawn(e);
+        if let Some(system) = system {
+            self.particles.insert(id, system);
+        }
         self.extra.insert(id, actor);
         self.spawned.push(id);
         Some(id)
@@ -506,6 +529,7 @@ impl World {
             self.outputs.push(Output::AmbientStop { actor: id });
         }
         self.extra.remove(&id);
+        self.particles.remove(&id);
         self.puppets.remove(&id);
         self.sequences.remove(&id);
         self.touching.retain(|&(a, b)| a != id && b != id);
@@ -596,9 +620,29 @@ impl World {
             let cue = crate::cutscene::tick_camera(self, dt);
             self.send_cue(cue);
         }
+        self.tick_particles(dt);
         self.fade.tick(dt);
         self.hud.tick(dt);
         self.update_touches();
+    }
+
+    fn tick_particles(&mut self, dt: f32) {
+        let mut done = Vec::new();
+        for (&id, system) in &mut self.particles {
+            let Some(e) = self.actors.get(id).and_then(Option::as_ref) else { continue };
+            let place = crate::particles::Place {
+                pos: e.pos,
+                rot: e.rot,
+                vel: if dt > 0.0 { e.moved / dt } else { Vec3::ZERO },
+                zone_gravity: self.zone_gravity,
+            };
+            if !system.tick(&place, dt) {
+                done.push(id);
+            }
+        }
+        for id in done {
+            self.remove(id);
+        }
     }
 
     /// Tells cutscene `to` that cue `cue` was given.

@@ -31,7 +31,8 @@ frame), another ribbit and `hop`. "Once" means from the first frame to the last,
 finish-animation rule has it (SurrealEngine). When Harry touches it, it plays its `pickup` sound,
 gives Harry 10 health (up to his maximum) and flies like a bean, but to the top left (the health
 bar).
-(The original also puts a glow effect above each frog; that comes with particles.)
+Each frog puts a glow (`HPParticle.Jellyglow`, see `specs/engine/Particles.md`) 96 units above
+itself when the level starts. The glow stays after the frog is collected.
 
 ## Harry's counters
 Beans start at 0. Health is `lifePotions` out of `MaxLifePotions` (50 and 50 for Harry).

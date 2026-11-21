@@ -108,6 +108,8 @@ impl Behaviour for Jellybean {
 // Chocolate frogs
 
 pub const RIBBIT: &str = "HPSounds.critters_sfx.frog_ribbit";
+/// The glow each frog puts above itself, 96 units up.
+pub const FROG_GLOW: &str = "HPParticle.Jellyglow";
 
 /// What the frog is doing in its loop.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -129,11 +131,23 @@ pub struct ChocolateFrog {
     /// Animation speed.
     rate: f32,
     flight: Option<Flight>,
+    glow: bool,
 }
 
 impl ChocolateFrog {
     pub fn new(p: &ActorProps) -> Self {
-        Self { pickup: p.text("Pickup"), step: None, wait: 0.0, rate: 1.0, flight: None }
+        Self { pickup: p.text("Pickup"), step: None, wait: 0.0, rate: 1.0, flight: None, glow: false }
+    }
+
+    /// The glow stays when the frog is collected (the original never removes it).
+    fn spawn_glow(&mut self, w: &mut World, me: ActorId) {
+        self.glow = true;
+        let Some(e) = w.get(me) else { return };
+        let at = e.pos + Vec3::Z * 96.0;
+        let mut props = hp1_data::PropMap::new();
+        props.insert("Location".into(), hp1_data::DataValue::Vector { x: at.x, y: at.y, z: at.z });
+        let name = format!("{}_glow", e.name);
+        w.spawn_actor(hp1_data::level::Actor { name, class: FROG_GLOW.into(), props, brush: None });
     }
 
     fn play(&mut self, w: &mut World, me: ActorId, name: &str, rate: f32) {
@@ -188,6 +202,9 @@ impl ChocolateFrog {
 
 impl Behaviour for ChocolateFrog {
     fn tick(&mut self, w: &mut World, me: ActorId, dt: f32) {
+        if !self.glow {
+            self.spawn_glow(w, me);
+        }
         let rate = self.rate;
         if let Some(a) = w.get_mut(me).and_then(|e| e.anim.as_mut()) {
             a.time += dt * rate;
@@ -281,6 +298,7 @@ mod tests {
                 wait: 0.0,
                 rate: 1.0,
                 flight: None,
+                glow: true,
             }),
         );
         let one = Sequence { frames: 11, rate: 10.0 };

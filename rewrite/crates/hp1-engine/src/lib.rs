@@ -13,6 +13,7 @@ pub mod hud;
 pub mod level_mesh;
 pub mod lighting;
 pub mod nav;
+pub mod particles;
 pub mod patrol;
 pub mod pickups;
 pub mod procedural;
