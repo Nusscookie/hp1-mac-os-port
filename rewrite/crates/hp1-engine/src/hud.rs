@@ -1,7 +1,10 @@
-//! The HUD: cutscene borders and spoken lines, as screen tiles (see `specs/hud/Hud.md`). The
-//! renderer draws the tiles; this module only decides what goes where.
+//! The HUD: cutscene borders, spoken lines, the bean counter and health, as screen tiles (see
+//! `specs/hud/Hud.md` and `specs/props/Pickups.md`). The renderer draws the tiles; this module
+//! only decides what goes where.
 
-use hp1_data::FontInfo;
+use hp1_data::{ClassTable, DataValue, FontInfo};
+
+use crate::world::Stats;
 
 /// How a tile is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +134,24 @@ impl Font {
     }
 }
 
+/// The full bar, with the empty one over its top part as health goes down.
+fn draw_health(stats: &Stats, size_of: &mut SizeOf, out: &mut Vec<Tile>) {
+    icon(HEALTH_FULL, 0.0, 0.0, size_of, out);
+    if let Some((w, h)) = size_of(HEALTH_EMPTY) {
+        let shown = (h - 50.0) * (1.0 - stats.health_part()) + 25.0;
+        out.push(Tile {
+            texture: HEALTH_EMPTY.to_owned(),
+            x: 0.0,
+            y: 0.0,
+            w,
+            h: shown,
+            src: [0.0, 0.0, w, shown],
+            color: [1.0; 4],
+            style: Style::Normal,
+        });
+    }
+}
+
 /// Words, runs of spaces and line breaks.
 fn blocks(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
@@ -147,10 +168,12 @@ fn blocks(text: &str) -> Vec<&str> {
     out
 }
 
-/// The two fonts spoken lines use.
+/// The fonts the HUD uses: two for spoken lines, one for the counters.
 pub struct HudFonts {
     pub message: Font,
     pub small: Font,
+    /// The font set up for the whole HUD (`MedInkFont`), which the counters' numbers use.
+    pub numbers: Font,
 }
 
 impl HudFonts {
@@ -161,12 +184,85 @@ impl HudFonts {
             _ => ("HPBase.SmallInkFont", "HPBase.TinyInkFont"),
         }
     }
+
+    /// The HUD's own font (Asian and Thai text used other fonts; not done yet).
+    pub const NUMBERS: &'static str = "HPBase.MedInkFont";
 }
 
 struct Message {
     text: String,
     left: f32,
 }
+
+/// Where a counter is while hidden: above the screen.
+const HIDDEN: f32 = -128.0;
+
+/// A counter that slides down from above the screen when shown (only beans so far).
+struct Counter {
+    /// Pixels in from the right edge.
+    x_offset: f32,
+    /// Top edge while shown.
+    y_final: f32,
+    image: String,
+    /// Bean piles, one more per three beans above the first three.
+    piles: Vec<String>,
+    y: f32,
+    shown: f32,
+}
+
+impl Counter {
+    fn beans(classes: &ClassTable) -> Self {
+        let d = classes.effective_defaults("HPMenu.BeansHudItem");
+        let f = |k: &str, or: f32| d.get(k).and_then(DataValue::as_f32).unwrap_or(or);
+        let t = |k: &str| d.get(k).and_then(DataValue::as_str).unwrap_or("").to_owned();
+        let piles = (0..4)
+            .map(|i| t(&if i == 0 { "BeanTexture".to_owned() } else { format!("BeanTexture[{i}]") }))
+            .filter(|p| !p.is_empty())
+            .collect();
+        Self {
+            x_offset: f("xOffset", 160.0),
+            y_final: f("yFinalOffset", 4.0),
+            image: t("Image"),
+            piles,
+            y: f("yOffset", HIDDEN),
+            shown: 0.0,
+        }
+    }
+
+    fn tick(&mut self, dt: f32) {
+        if self.shown > 0.0 {
+            self.shown -= dt;
+            if self.y < self.y_final {
+                self.y += (self.y_final - self.y) / 5.0;
+            }
+        } else if self.y > HIDDEN {
+            self.y += (HIDDEN - self.y) / 5.0;
+        }
+    }
+}
+
+/// Texture sizes, for the HUD's icons (drawn at their own size).
+pub type SizeOf<'a> = dyn FnMut(&str) -> Option<(f32, f32)> + 'a;
+
+/// An icon at its own size.
+fn icon(texture: &str, x: f32, y: f32, size_of: &mut SizeOf, out: &mut Vec<Tile>) -> Option<(f32, f32)> {
+    let (w, h) = size_of(texture)?;
+    out.push(Tile {
+        texture: texture.to_owned(),
+        x,
+        y,
+        w,
+        h,
+        src: [0.0, 0.0, w, h],
+        color: [1.0; 4],
+        style: Style::Normal,
+    });
+    Some((w, h))
+}
+
+/// The health bar's two pictures.
+pub const HEALTH_FULL: &str = "HPBase.Icons.HarryBarFull";
+pub const HEALTH_EMPTY: &str = "HPBase.Icons.HarryBarEmpty";
 
 /// The HUD's state.
 pub struct Hud {
@@ -175,11 +271,12 @@ pub struct Hud {
     message: Option<Message>,
     /// `ToggleDialog`: whether the text of spoken lines is shown.
     pub show_dialog: bool,
+    beans: Counter,
 }
 
 impl Default for Hud {
     fn default() -> Self {
-        Self { border: 0.0, message: None, show_dialog: true }
+        Self::new(&ClassTable::default())
     }
 }
 
@@ -187,6 +284,16 @@ impl Default for Hud {
 pub const BORDER_TEXTURE: &str = "HPBase.Icons.leftPanel";
 
 impl Hud {
+    /// The HUD with its counters' settings from the converted classes.
+    pub fn new(classes: &ClassTable) -> Self {
+        Self { border: 0.0, message: None, show_dialog: true, beans: Counter::beans(classes) }
+    }
+
+    /// Shows the bean counter for 5 s.
+    pub fn show_beans(&mut self) {
+        self.beans.shown = 5.0;
+    }
+
     /// A spoken line to show for `seconds`; it replaces the one showing.
     pub fn show_line(&mut self, text: &str, seconds: f32) {
         self.message = Some(Message { text: text.to_owned(), left: seconds });
@@ -199,6 +306,7 @@ impl Hud {
 
     /// One game tick.
     pub fn tick(&mut self, dt: f32) {
+        self.beans.tick(dt);
         if let Some(m) = &mut self.message {
             m.left -= dt;
             if m.left < 0.0 {
@@ -208,7 +316,15 @@ impl Hud {
     }
 
     /// One drawn frame on a `w` × `h` screen: moves the bars and returns what to draw.
-    pub fn draw(&mut self, w: f32, h: f32, cut_mode: bool, fonts: Option<&HudFonts>) -> Vec<Tile> {
+    /// `size_of` gives the size of a texture, for the icons.
+    pub fn draw(
+        &mut self,
+        [w, h]: [f32; 2],
+        cut_mode: bool,
+        stats: &Stats,
+        fonts: Option<&HudFonts>,
+        size_of: &mut SizeOf,
+    ) -> Vec<Tile> {
         let full = h / 8.0;
         if cut_mode || self.message.is_some() {
             if self.border < full {
@@ -241,7 +357,48 @@ impl Hud {
             let blue = [127.0 / 255.0, 127.0 / 255.0, 1.0, 1.0];
             font.draw(&m.text, x, h - self.border + 1.0, w, blue, &mut out);
         }
+        self.draw_beans(w, stats, fonts, size_of, &mut out);
+        if !cut_mode {
+            draw_health(stats, size_of, &mut out);
+        }
         out
+    }
+
+    fn draw_beans(
+        &self,
+        w: f32,
+        stats: &Stats,
+        fonts: Option<&HudFonts>,
+        size_of: &mut SizeOf,
+        out: &mut Vec<Tile>,
+    ) {
+        let c = &self.beans;
+        if c.y <= HIDDEN {
+            return;
+        }
+        let x = w - c.x_offset;
+        if let Some((iw, ih)) = icon(&c.image, x, c.y, size_of, out)
+            && let Some(fonts) = fonts
+        {
+            let left = if stats.beans < 10 { 5.0 } else { 10.0 };
+            let text = stats.beans.to_string();
+            fonts.numbers.draw(
+                &text,
+                x + iw / 2.0 - left,
+                c.y + ih / 2.0 + 5.0,
+                w,
+                [0.0, 0.0, 0.0, 1.0],
+                out,
+            );
+        }
+        let mut n = stats.beans.min(15) - 3;
+        for pile in &c.piles {
+            if n <= 0 {
+                break;
+            }
+            icon(pile, x, c.y, size_of, out);
+            n -= 3;
+        }
     }
 }
 
@@ -287,18 +444,55 @@ mod tests {
 
     #[test]
     fn bars_slide_in_for_a_line_and_out_after_it() {
-        let fonts = HudFonts { message: font(), small: font() };
+        let fonts = HudFonts { message: font(), small: font(), numbers: font() };
+        let stats = Stats { beans: 0, health: 50.0, max_health: 50.0 };
         let mut hud = Hud::default();
         hud.show_line("HI", 0.5);
-        let tiles = hud.draw(640.0, 480.0, false, Some(&fonts));
+        let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut |_| None);
         // A fifth of the way to 60 (one eighth of 480).
         assert_eq!(tiles[0].h, 12.0);
         // Centred: (640 - 16) / 2.
         assert_eq!((tiles[2].x, tiles[2].y), (312.0, 480.0 - 12.0 + 1.0));
         hud.tick(0.6);
         assert!(hud.line().is_none());
-        let tiles = hud.draw(640.0, 480.0, false, Some(&fonts));
+        let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut |_| None);
         assert!((tiles[0].h - 9.6).abs() < 1e-4);
         assert_eq!(tiles.len(), 2);
+    }
+
+    #[test]
+    fn the_bean_counter_slides_in_and_health_shows_outside_cutscenes() {
+        let fonts = HudFonts { message: font(), small: font(), numbers: font() };
+        let mut stats = Stats { beans: 10, health: 25.0, max_health: 50.0 };
+        let mut hud = Hud::default();
+        hud.beans.image = "Test.Counter".into();
+        hud.beans.piles = (1..=4).map(|i| format!("Test.Beans{i}")).collect();
+        let mut size = |t: &str| Some(if t.starts_with("Test.") { (64.0, 32.0) } else { (128.0, 150.0) });
+        // Hidden until shown.
+        let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut size);
+        assert!(tiles.iter().all(|t| !t.texture.starts_with("Test.")));
+        hud.show_beans();
+        hud.tick(0.1);
+        // A fifth of the way from -128 to 4.
+        assert!((hud.beans.y - (-128.0 + 132.0 / 5.0)).abs() < 1e-4);
+        let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut size);
+        let counter = tiles.iter().find(|t| t.texture == "Test.Counter").unwrap();
+        assert_eq!(counter.x, 640.0 - 160.0);
+        // "10": two digits, 10 left of the centre; then 10 - 3 beans make 3 piles.
+        let digits: Vec<_> = tiles.iter().filter(|t| t.color == [0.0, 0.0, 0.0, 1.0]).collect();
+        assert_eq!(digits.len(), 2);
+        assert_eq!(digits[0].x, 640.0 - 160.0 + 32.0 - 10.0);
+        assert_eq!(tiles.iter().filter(|t| t.texture.starts_with("Test.Beans")).count(), 3);
+        // Half health: (150 - 50) * 0.5 + 25 rows of the empty bar.
+        let empty = tiles.iter().find(|t| t.texture == HEALTH_EMPTY).unwrap();
+        assert_eq!(empty.h, 75.0);
+        // No health bar in cutscene mode; the counter goes back up after 5 s.
+        stats.beans = 1;
+        let tiles = hud.draw([640.0, 480.0], true, &stats, Some(&fonts), &mut size);
+        assert!(tiles.iter().all(|t| t.texture != HEALTH_FULL));
+        for _ in 0..200 {
+            hud.tick(0.05);
+        }
+        assert!(hud.beans.y < -127.0);
     }
 }

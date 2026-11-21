@@ -112,6 +112,33 @@ impl Sequence {
     }
 }
 
+/// Harry's counters (`specs/props/Pickups.md`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stats {
+    pub beans: i32,
+    /// `lifePotions`.
+    pub health: f32,
+    /// `MaxLifePotions`.
+    pub max_health: f32,
+}
+
+impl Stats {
+    /// The starting values of Harry's class.
+    pub fn for_class(classes: &ClassTable, class: &str) -> Self {
+        let d = classes.effective_defaults(class);
+        let f = |k: &str, or: f32| d.get(k).and_then(hp1_data::DataValue::as_f32).unwrap_or(or);
+        Self { beans: 0, health: f("lifePotions", 50.0), max_health: f("MaxLifePotions", 50.0) }
+    }
+    /// More health, up to the maximum.
+    pub fn add_health(&mut self, n: f32) {
+        self.health = (self.health + n).min(self.max_health);
+    }
+    /// Health as a part of the maximum, 0..1.
+    pub fn health_part(&self) -> f32 {
+        if self.max_health > 0.0 { (self.health / self.max_health).clamp(0.0, 1.0) } else { 0.0 }
+    }
+}
+
 /// The screen fade (`specs/cutscenes/CutScene.md`): 0 is normal, −1 black.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Fade {
@@ -303,6 +330,10 @@ pub struct World {
     pub hud: crate::hud::Hud,
     /// Report every cutscene line as it runs (as notes).
     pub trace_cutscenes: bool,
+    /// Harry's beans and health.
+    pub stats: Stats,
+    /// Where the player looks from, set by the program each frame (for things flying to the HUD).
+    pub view: Option<crate::camera::View>,
     /// Characters and Harry while cutscenes drive them.
     pub(crate) puppets: HashMap<ActorId, Puppet>,
     /// Animation lengths per object, by lower-case sequence name (from the program's meshes).
@@ -325,6 +356,14 @@ impl World {
             }));
         }
         let camera = CutCamera::new(&level, &classes);
+        let harry_class = level
+            .actors
+            .iter()
+            .flatten()
+            .find(|a| classes.is_a(&a.class, "HPBase.baseHarry"))
+            .map_or("HPBase.baseHarry", |a| a.class.as_str());
+        let stats = Stats::for_class(&classes, harry_class);
+        let hud = crate::hud::Hud::new(&classes);
         Self {
             level,
             classes,
@@ -337,8 +376,10 @@ impl World {
             fade: Fade::default(),
             cut_mode: false,
             lines: Box::new(NoLines),
-            hud: Default::default(),
+            hud,
             trace_cutscenes: false,
+            stats,
+            view: None,
             puppets: HashMap::new(),
             sequences: HashMap::new(),
             touching: HashSet::new(),
@@ -440,6 +481,22 @@ impl World {
         self.rng ^= self.rng >> 7;
         self.rng ^= self.rng << 17;
         (self.rng % n.max(1) as u64) as usize
+    }
+
+    /// A random number in 0..1.
+    pub fn frand(&mut self) -> f32 {
+        self.rand(1 << 24) as f32 / (1 << 24) as f32
+    }
+
+    /// A point given in screen terms (`c.x` right and `c.y` up, as parts of the half-width
+    /// the 90° view shows at that distance; `c.z` units ahead) in the world, for the current
+    /// view. None before the program has said where the view is.
+    pub fn camera_to_world(&self, c: Vec3) -> Option<Vec3> {
+        let v = self.view?;
+        let forward = (v.target - v.pos).normalize_or_zero();
+        let right = Vec3::Z.cross(forward).normalize_or_zero();
+        let up = forward.cross(right);
+        Some(v.pos + forward * c.z + (right * c.x + up * c.y) * c.z)
     }
 
     /// Takes an object out of the level for good.

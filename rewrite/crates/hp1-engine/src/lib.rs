@@ -14,6 +14,7 @@ pub mod level_mesh;
 pub mod lighting;
 pub mod nav;
 pub mod patrol;
+pub mod pickups;
 pub mod procedural;
 pub mod props;
 pub mod puppet;

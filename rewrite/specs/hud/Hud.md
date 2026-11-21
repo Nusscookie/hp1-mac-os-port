@@ -5,9 +5,10 @@ Sources: HP1's HUD classes (baseHud, HPHud), the console's font choice (HPConsol
 text is measured and wrapped, SurrealEngine's canvas code.
 
 ## Each frame
-The HUD draws, in this order: the cutscene borders, the current spoken line, then (later
-milestones) the HUD items. Health, the countdown and enemy health are only drawn outside
-cutscene mode. Nothing is drawn while the menu book is open.
+The HUD draws, in this order: the cutscene borders, the current spoken line, the counters (the
+bean counter so far), then health, the countdown and enemy health, which are only drawn outside
+cutscene mode (health so far; see `specs/props/Pickups.md`). Nothing is drawn while the menu
+book is open. Everything is drawn white-tinted in `MedInkFont` unless said otherwise.
 
 ## Cutscene borders
 Two black bars, at the top and the bottom, both `border` pixels high. They are filled with the

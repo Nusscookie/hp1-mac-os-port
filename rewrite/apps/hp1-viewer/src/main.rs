@@ -106,6 +106,11 @@ impl Camera {
     }
 
     /// A camera at the view's position looking at its target.
+    /// The view the world uses for things flying to the HUD.
+    fn view(&self) -> hp1_engine::camera::View {
+        hp1_engine::camera::View { pos: self.pos, target: self.pos + self.axes().0 }
+    }
+
     fn looking(v: hp1_engine::camera::View) -> Camera {
         let (yaw, pitch) = v.angles();
         Camera { pos: v.pos, yaw, pitch }
@@ -398,6 +403,7 @@ fn main() -> Result<()> {
         loaded.world.set_sequences(harry, list);
     }
     loaded.world.lines = Box::new(sound::DialogLines::open(&args.data)?);
+    loaded.actors.drive(&loaded.world);
     let mut cut_mode = false;
 
     if let Some(out) = &args.shot {
@@ -438,6 +444,7 @@ fn main() -> Result<()> {
             } else if loaded.world.camera.active {
                 camera = Camera::looking(loaded.world.camera.view());
             }
+            loaded.world.view = Some(camera.view());
             report(&mut loaded.world, &mut cut_mode);
             // The HUD's bars move once per drawn frame.
             hud_quads = hud_draw.quads(&gpu, &mut loaded.world, hud_size);
@@ -661,6 +668,7 @@ fn main() -> Result<()> {
             world.camera.follow(hp1_engine::camera::View { pos: camera.pos, target: camera.pos + fwd });
         }
         jump = false;
+        world.view = Some(camera.view());
         report(world, &mut cut_mode);
         if args.mute {
             world.outputs.clear();

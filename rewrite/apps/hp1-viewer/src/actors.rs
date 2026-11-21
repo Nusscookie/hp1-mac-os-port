@@ -39,6 +39,8 @@ struct Instance {
     fit: (Vec3, f32),
     /// Seconds into the animation chosen by the world, instead of free running.
     driven: Option<f32>,
+    /// Moved by its behaviour in the world even without an animation of its own (beans).
+    follows: bool,
     motion: Motion,
     to_world: Mat4,
     /// Per material: texture index and blend.
@@ -91,6 +93,18 @@ impl Actors {
     /// Every world object drawn with an animated mesh.
     pub fn animated(&self) -> Vec<usize> {
         self.moving.iter().filter_map(|i| i.actor).collect()
+    }
+
+    /// Lets the world move every still object that has a behaviour there (beans, frogs).
+    pub fn drive(&mut self, world: &World) {
+        let (driven, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.still)
+            .into_iter()
+            .partition(|i| i.actor.and_then(|id| world.get(id)).is_some_and(|e| e.behaviour.is_some()));
+        self.still = still;
+        self.moving.extend(driven.into_iter().map(|mut i| {
+            i.follows = true;
+            i
+        }));
     }
 
     /// Stops drawing world object `id` (the placed Harry, who is drawn as the player).
@@ -207,8 +221,11 @@ impl Actors {
         self.moving.retain_mut(|inst| {
             let Some(id) = inst.actor else { return true };
             let Some(e) = world.get(id) else { return false };
-            let Some(anim) = &e.anim else { return true };
-            place(inst, level, classes, all_lights, e.pos, e.rot[1], &anim.name, anim.time);
+            match &e.anim {
+                Some(anim) => place(inst, level, classes, all_lights, e.pos, e.rot[1], &anim.name, anim.time),
+                None if inst.follows => put(inst, level, classes, all_lights, e.pos, e.rot[1]),
+                None => {}
+            }
             true
         });
     }
@@ -282,17 +299,31 @@ fn place(
     anim: &str,
     time: f32,
 ) {
-    let (pivot, scale) = inst.fit;
-    inst.to_world = Mat4::from_translation(pos + pivot)
-        * rotator_matrix(0, yaw, 0)
-        * Mat4::from_scale(Vec3::splat(scale))
-        * mesh_to_object(&inst.mesh.transform);
+    put(inst, level, classes, all_lights, pos, yaw);
     if let Motion::Skeletal { anim: file, seq, .. } = &mut inst.motion
         && let Some(i) = file.sequences.iter().position(|s| s.info.name.eq_ignore_ascii_case(anim))
     {
         *seq = i;
     }
-    inst.driven = Some(time);
+    if !(inst.follows && anim.is_empty()) {
+        inst.driven = Some(time);
+    }
+}
+
+/// Puts an instance at collision centre `pos`, facing `yaw` (rotation units), lit from there.
+fn put(
+    inst: &mut Instance,
+    level: &LevelFile,
+    classes: &ClassTable,
+    all_lights: &[LightSource],
+    pos: Vec3,
+    yaw: i32,
+) {
+    let (pivot, scale) = inst.fit;
+    inst.to_world = Mat4::from_translation(pos + pivot)
+        * rotator_matrix(0, yaw, 0)
+        * Mat4::from_scale(Vec3::splat(scale))
+        * mesh_to_object(&inst.mesh.transform);
     inst.lights =
         all_lights.iter().filter(|l| l.location.distance(pos) < l.radius + 100.0).copied().collect();
     inst.ambient = zone_ambient(level, classes, zone_at(&level.model, pos));
@@ -408,6 +439,7 @@ impl Loader<'_> {
             actor: None,
             fit: (Vec3::from(p.vec3("PrePivot")), scale),
             driven: None,
+            follows: false,
             to_world,
             materials,
             lights,

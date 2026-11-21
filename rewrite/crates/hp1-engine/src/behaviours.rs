@@ -24,6 +24,10 @@ pub fn make(class: &str, p: &ActorProps, classes: &ClassTable) -> Option<Box<dyn
         Some(Box::new(MusicEvent::new(p)))
     } else if is("HPBase.CutScene") {
         Some(Box::new(crate::cutscene::CutScene::new(p)))
+    } else if is("HProps.Jellybean") {
+        Some(Box::new(crate::pickups::Jellybean::new()))
+    } else if is("HarryPotter.ChocolateFrog") {
+        Some(Box::new(crate::pickups::ChocolateFrog::new(p)))
     } else if is("HPBase.baseChar") && p.bool("bFollowPatrolPoints") && !p.bool("bHidden") {
         Some(Box::new(crate::character::Character::new(p)))
     } else {
