@@ -39,6 +39,7 @@ pub fn deliver(w: &mut World, id: &str) -> f32 {
     };
     // Emote sounds ("…EMOTIV…") have no subtitle.
     if !id.to_ascii_uppercase().contains("EMOTIV") {
+        w.hud.show_line(&text, seconds);
         w.outputs.push(Output::Message { text, seconds });
     }
     seconds

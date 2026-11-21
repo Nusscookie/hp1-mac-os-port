@@ -9,6 +9,7 @@
 //! optionally sending `--trigger` and running the world for `--run` seconds.
 
 mod actors;
+mod hud;
 mod movers;
 mod player;
 mod sound;
@@ -402,6 +403,9 @@ fn main() -> Result<()> {
     if let Some(out) = &args.shot {
         let gpu = Gpu::new(hp1_render::create_instance(), None).map_err(|e| anyhow!(e))?;
         let mut renderer = WorldRenderer::new(&gpu, wgpu::TextureFormat::Rgba8Unorm);
+        let mut hud_draw = hud::HudDraw::new(&gpu, wgpu::TextureFormat::Rgba8Unorm, &args.data);
+        let hud_size = [args.size.0 as f32, args.size.1 as f32];
+        let mut hud_quads = Vec::new();
         let mut scene = upload(&gpu, &renderer, &loaded);
         for tag in &args.trigger {
             loaded.world.trigger_event(tag, None);
@@ -435,6 +439,8 @@ fn main() -> Result<()> {
                 camera = Camera::looking(loaded.world.camera.view());
             }
             report(&mut loaded.world, &mut cut_mode);
+            // The HUD's bars move once per drawn frame.
+            hud_quads = hud_draw.quads(&gpu, &mut loaded.world, hud_size);
             loaded.world.outputs.retain(|o| !matches!(o, Output::Voice { .. }));
         }
         for o in loaded.world.outputs.drain(..) {
@@ -467,6 +473,7 @@ fn main() -> Result<()> {
             h,
             camera.view_proj(w, h),
             loaded.sky_origin.map(|o| camera.from(o).view_proj(w, h)),
+            Some((&hud_draw.overlay, hud_size, &hud_quads)),
         );
         save_png(out, &img)?;
         println!("wrote {}", out.display());
@@ -522,6 +529,7 @@ fn main() -> Result<()> {
     config.present_mode = wgpu::PresentMode::AutoVsync;
     surface.configure(&gpu.device, &config);
     let mut renderer = WorldRenderer::new(&gpu, format);
+    let mut hud_draw = hud::HudDraw::new(&gpu, format, &args.data);
     let mut scene = upload(&gpu, &renderer, &loaded);
     let mut depth = hp1_render::create_depth(&gpu, width, height);
 
@@ -693,6 +701,11 @@ fn main() -> Result<()> {
             sky,
             [0.0; 3],
         );
+        // The HUD in window points, so it keeps its size on high-density screens.
+        let (pw, ph) = platform.point_size();
+        let hud_size = [pw.max(1) as f32, ph.max(1) as f32];
+        let quads = hud_draw.quads(&gpu, &mut loaded.world, hud_size);
+        hud_draw.overlay.draw(&gpu, &mut encoder, &view, hud_size, &quads);
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
     }

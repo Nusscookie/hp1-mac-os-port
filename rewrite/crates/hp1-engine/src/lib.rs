@@ -9,6 +9,7 @@ pub mod character;
 pub mod collision;
 pub mod cutscene;
 pub mod dialog;
+pub mod hud;
 pub mod level_mesh;
 pub mod lighting;
 pub mod nav;

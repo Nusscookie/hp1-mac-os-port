@@ -150,11 +150,31 @@ language (`HPdialog`, section `all`); its voice is the sound `AllDialog.<id>`.
 - Without one it lasts 3 s and the text gets a `*` in front.
 - The text shows as a message for the line's time, except for ids containing `EMOTIV`.
 
+## Emotes
+An emote line (`EMOTE…`) first checks whether the character is already emoting; if so the whole
+line is skipped and the member goes on at once. Otherwise it delivers the dialogue in `<…>` (2 s
+without), starts the emote named in `(…)` for that long, triggers the event in `[…]`, and the
+member waits that long plus 0.75 s.
+
+A character has up to six emotes (`Emotes`: a name and start, loop and stop animations; names
+match ignoring case). "none" or an empty name starts nothing. An unknown name plays the emote
+chosen last time again (none at first), as in the original. While emoting:
+1. Physics stops (it only turns); it remembers what it was doing and its facing. The emote's
+   time counts down every tick from here.
+2. With a start animation: plays it, turns to face Harry, and waits for both.
+3. With a loop animation: turns to face Harry, then loops it.
+4. Checks every 0.2 s until the time is used up. From here it no longer counts as emoting.
+5. With a stop animation: plays it, turns to face Harry, and waits for both.
+6. Turns back to its old facing and goes back to what it was doing: standing for the cutscene
+   (its cutscene idle animation), its own behaviour again (which starts over), or, for a
+   character with no behaviour of its own, its idle animation (`idleAnimName`, else its
+   starting animation).
+
 ## Uses from the converted data
 On scenes: bPlayOnce, bTouchStarts, bTriggerStarts, bLevelLoadStarts, bDelayLevelFadeIn,
 Cast[i].actor/alias, Locs[i].actor/alias, Cast0Script…Cast6Script. On characters:
 CutIdleAnim, CutWalkAnim, CutTalkAnim, CutTalkStartAnim, CutTalkEndAnim, idleAnimName,
-walkAnimName, GroundSpeed, RotationRate. The dialogue text (`hpdialog.*`) and voices
+walkAnimName, AnimSequence, Emotes[i].name/start/loop/stop, GroundSpeed, RotationRate. The dialogue text (`hpdialog.*`) and voices
 (`AllDialog`). Animation lengths from the meshes' sequences.
 
 ## Open points and changes
@@ -163,8 +183,8 @@ walkAnimName, GroundSpeed, RotationRate. The dialogue text (`hpdialog.*`) and vo
   has a pitch rate of 0, so he doesn't tilt in the original either.)
 - Release of a character captured while it was in a cutscene state other than standing idle
   (e.g. captured twice, mid-walk) puts it back to standing idle.
-- Emotes: the emote animation (`(…)` in the line, from the character's `Emotes` list) isn't
-  played yet; the dialogue, event and waiting are.
+- Emotes in the middle of a walk or a talk go back to that walk or talk where it was; the
+  original starts that state over.
 - What happens within one tick follows our objects' order (the level's order), as in the
   original; the exact sub-tick timing of the original's latent waits isn't knowable beyond that.
 - Fixed on purpose: a camera GOTO/TELEPORT to a name that can't be found is skipped. The

@@ -440,9 +440,20 @@ impl Behaviour for Trigger {
 
 pub struct Dispatcher {
     events: Vec<(String, f32)>,
-    /// Next event to send and time left before it.
-    running: Option<(usize, f32)>,
+    state: Dispatch,
     instigator: Option<ActorId>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Dispatch {
+    Idle,
+    /// Triggered; starts going through its events on its next tick.
+    Starting,
+    /// Waiting before sending event `i`.
+    Waiting {
+        i: usize,
+        left: f32,
+    },
 }
 
 impl Dispatcher {
@@ -450,31 +461,41 @@ impl Dispatcher {
         let events = (0..8)
             .map(|i| (text(p, &indexed("OutEvents", i)), p.f32(&indexed("OutDelays", i), 0.0)))
             .collect();
-        Self { events, running: None, instigator: None }
+        Self { events, state: Dispatch::Idle, instigator: None }
+    }
+
+    /// The wait for the next event slot from `from` that names an event (empty ones are skipped
+    /// with their delays), or idle when none is left.
+    fn wait_from(&self, from: usize) -> Dispatch {
+        (from..self.events.len())
+            .find(|&i| !self.events[i].0.is_empty())
+            .map_or(Dispatch::Idle, |i| Dispatch::Waiting { i, left: self.events[i].1 })
     }
 }
 
 impl Behaviour for Dispatcher {
     fn trigger(&mut self, _w: &mut World, _me: ActorId, instigator: Option<ActorId>) {
-        if self.running.is_none() {
-            self.running = Some((0, self.events[0].1));
+        if self.state == Dispatch::Idle {
+            self.state = Dispatch::Starting;
             self.instigator = instigator;
         }
     }
 
     fn tick(&mut self, w: &mut World, _me: ActorId, dt: f32) {
-        let mut budget = dt;
-        while let Some((i, left)) = self.running {
-            if left > budget {
-                self.running = Some((i, left - budget));
-                return;
-            }
-            budget -= left;
-            let event = self.events[i].0.clone();
-            if !event.is_empty() {
+        match self.state {
+            Dispatch::Idle => {}
+            // The wait starts counting on the following tick.
+            Dispatch::Starting => self.state = self.wait_from(0),
+            Dispatch::Waiting { i, left } => {
+                if left - dt > 0.0 {
+                    self.state = Dispatch::Waiting { i, left: left - dt };
+                    return;
+                }
+                // Time left over is not carried into the next wait.
+                let event = self.events[i].0.clone();
                 w.trigger_event(&event, self.instigator);
+                self.state = self.wait_from(i + 1);
             }
-            self.running = self.events.get(i + 1).map(|e| (i + 1, e.1));
         }
     }
 }
@@ -606,9 +627,45 @@ pub(crate) mod tests {
         w.tick(0.1);
         assert!(w.outputs.is_empty());
         w.get_mut(harry).unwrap().pos = Vec3::new(10.0, 0.0, 0.0);
+        // Touched; the dispatcher starts on its next tick and its wait of 0 takes one more.
         w.tick(0.1);
+        w.tick(0.1);
+        assert!(w.outputs.is_empty());
         w.tick(0.1);
         assert_eq!(w.outputs, vec![Output::Music { song: Some("Tune".into()) }]);
+    }
+
+    #[test]
+    fn dispatchers_skip_empty_slots_and_their_delays() {
+        let f = DataValue::Float;
+        let mut w = world_with(vec![
+            (
+                "Dispatcher0",
+                "Engine.Dispatcher",
+                vec![
+                    ("Tag", s("go")),
+                    ("OutEvents", s("a")),
+                    ("OutDelays", f(0.25)),
+                    ("OutDelays[1]", f(5.0)),
+                    ("OutEvents[2]", s("b")),
+                    ("OutDelays[2]", f(0.25)),
+                ],
+            ),
+            ("MusicEvent0", "Engine.MusicEvent", vec![("Tag", s("a")), ("Song", s("A"))]),
+            ("MusicEvent1", "Engine.MusicEvent", vec![("Tag", s("b")), ("Song", s("B"))]),
+        ]);
+        w.trigger_event("go", None);
+        let mut sent = Vec::new();
+        for n in 1..=8 {
+            w.tick(0.1);
+            for o in w.outputs.drain(..) {
+                sent.push((n, o));
+            }
+        }
+        // Start (tick 1), 0.25 s wait over ticks 2-4, then 0.25 s again over ticks 5-7;
+        // the 5 s of the empty slot is skipped.
+        let song = |x: &str| Output::Music { song: Some(x.into()) };
+        assert_eq!(sent, vec![(4, song("A")), (7, song("B"))]);
     }
 
     /// A 64-unit cube door at the origin that rises 100 units in one second when triggered.

@@ -42,13 +42,53 @@ enum TalkPhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+enum EmotePhase {
+    /// Start animation playing (`left` until it ends).
+    Start { left: f32 },
+    /// About to loop the loop animation.
+    Loop,
+    /// Waiting for the emote's time to run out, checking every `poll`.
+    Wait { poll: f32 },
+    /// Stop animation playing.
+    Stop { left: f32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Mode {
     Free,
     Still,
-    Walk { dest: ActorId, timeout: f32, arrived: bool, poll: f32 },
-    Turn { target: ActorId },
-    Animate { left: f32, back: Back },
-    Talk { left: f32, phase: TalkPhase, phase_left: f32, poll: f32 },
+    Walk {
+        dest: ActorId,
+        timeout: f32,
+        arrived: bool,
+        poll: f32,
+    },
+    Turn {
+        target: ActorId,
+    },
+    Animate {
+        left: f32,
+        back: Back,
+    },
+    Talk {
+        left: f32,
+        phase: TalkPhase,
+        phase_left: f32,
+        poll: f32,
+    },
+    /// Emoting; `turning` while it turns to Harry before going on.
+    Emote {
+        phase: EmotePhase,
+        turning: bool,
+    },
+}
+
+/// One of a character's emotes: start, loop and stop animations ("" = none).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Emote {
+    start: String,
+    looping: String,
+    stop: String,
 }
 
 pub struct Puppet {
@@ -60,10 +100,22 @@ pub struct Puppet {
     pub(crate) restart: bool,
     notify: Option<(ActorId, String)>,
     idle_anim: String,
+    /// What it loops standing on its own (`idleAnimName`, else its starting animation).
+    own_idle: String,
     walk_anim: String,
     talk_anim: String,
     talk_start: String,
     talk_end: String,
+    /// The character's emotes by name.
+    emotes: Vec<(String, Emote)>,
+    /// The emote last chosen; an unknown name plays this one again, as in the original.
+    emote: Emote,
+    /// Emoting started and its stop animation hasn't begun.
+    emoting: bool,
+    /// The emote's time left (counts down while emoting).
+    emote_left: f32,
+    /// What it was doing before the emote, its physics and its facing.
+    emote_back: Option<(Mode, bool, f32)>,
     movement: Movement,
     turn_rate: f32,
     body: Body,
@@ -117,10 +169,28 @@ impl Puppet {
             restart: false,
             notify: None,
             idle_anim: or("CutIdleAnim", "idleAnimName", "Breath"),
+            own_idle: or("idleAnimName", "AnimSequence", ""),
             walk_anim: or("CutWalkAnim", "walkAnimName", "Walk"),
             talk_anim: p.text("CutTalkAnim"),
             talk_start: p.text("CutTalkStartAnim"),
             talk_end: p.text("CutTalkEndAnim"),
+            emotes: (0..6)
+                .filter_map(|i| {
+                    let key =
+                        |f: &str| if i == 0 { format!("Emotes.{f}") } else { format!("Emotes[{i}].{f}") };
+                    let name = p.text(&key("name"));
+                    let e = Emote {
+                        start: p.text(&key("start")),
+                        looping: p.text(&key("loop")),
+                        stop: p.text(&key("stop")),
+                    };
+                    (!name.is_empty() || e != Emote::default()).then_some((name, e))
+                })
+                .collect(),
+            emote: Emote::default(),
+            emoting: false,
+            emote_left: 0.0,
+            emote_back: None,
             movement,
             turn_rate: p.rotator("RotationRate")[1].abs() as f32,
             body,
@@ -216,6 +286,13 @@ impl Puppet {
     /// One tick; returns the cue to give when a move or turn is done.
     pub(crate) fn tick(&mut self, w: &mut World, id: ActorId, dt: f32) -> Option<(ActorId, String)> {
         if self.mode == Mode::Free {
+            // One with no behaviour of its own still turns back after an emote.
+            if w.get(id).is_some_and(|e| e.behaviour.is_none()) && turn(self.yaw, self.want_yaw).abs() > 0.5 {
+                self.turn_towards(dt);
+                if let Some(e) = w.get_mut(id) {
+                    e.rot = [0, self.yaw.round() as i32 & 0xffff, 0];
+                }
+            }
             return None;
         }
         // Whatever moved it since (a cutscene's TELEPORT) counts.
@@ -296,12 +373,13 @@ impl Puppet {
                     _ => {}
                 }
             }
+            Mode::Emote { phase, turning } => self.emote_tick(w, id, phase, turning, dt),
         }
         if self.physics {
             let c = w.collider(Some(id));
             self.body.tick(&c, &self.movement, Vec3::ZERO, false, dt);
         }
-        if !matches!(self.mode, Mode::Turn { .. }) {
+        if !matches!(self.mode, Mode::Turn { .. } | Mode::Emote { turning: true, .. }) {
             self.turn_towards(dt);
         }
         self.anim.time += dt;
@@ -312,6 +390,74 @@ impl Puppet {
         }
         self.write(w, id);
         cue
+    }
+
+    /// One tick of an emote (see the spec's "Emotes").
+    fn emote_tick(&mut self, w: &mut World, id: ActorId, mut phase: EmotePhase, mut turning: bool, dt: f32) {
+        self.emote_left -= dt;
+        if turning {
+            let harry = w.player.and_then(|h| w.get(h)).map(|e| e.pos);
+            if let Some(y) = harry.and_then(|h| yaw_to(self.body.pos, h)) {
+                self.want_yaw = y;
+            }
+            self.turn_towards(dt);
+            turning = turn(self.yaw, self.want_yaw).abs() >= FACING;
+        }
+        let mut done = false;
+        phase = match phase {
+            EmotePhase::Start { left } if turning || left - dt > 0.0 => EmotePhase::Start { left: left - dt },
+            EmotePhase::Start { .. } if !self.emote.looping.is_empty() => {
+                turning = true;
+                EmotePhase::Loop
+            }
+            EmotePhase::Start { .. } => EmotePhase::Wait { poll: 0.0 },
+            EmotePhase::Loop if turning => EmotePhase::Loop,
+            EmotePhase::Loop => {
+                let a = self.emote.looping.clone();
+                self.loop_anim(w, id, &a);
+                EmotePhase::Wait { poll: 0.0 }
+            }
+            EmotePhase::Wait { poll } if poll - dt > 0.0 => EmotePhase::Wait { poll: poll - dt },
+            EmotePhase::Wait { .. } if self.emote_left > 0.0 => EmotePhase::Wait { poll: TALK_POLL },
+            EmotePhase::Wait { .. } => {
+                self.emoting = false;
+                if self.emote.stop.is_empty() {
+                    done = true;
+                    EmotePhase::Wait { poll: 0.0 }
+                } else {
+                    let a = self.emote.stop.clone();
+                    turning = true;
+                    EmotePhase::Stop { left: self.play_once(w, id, &a) }
+                }
+            }
+            EmotePhase::Stop { left } if turning || left - dt > 0.0 => EmotePhase::Stop { left: left - dt },
+            EmotePhase::Stop { .. } => {
+                done = true;
+                phase
+            }
+        };
+        self.mode = Mode::Emote { phase, turning };
+        if done {
+            // Back to what it was doing, turning back to its old facing.
+            let (mode, physics, yaw) =
+                self.emote_back.take().unwrap_or((Mode::Still, self.physics, self.yaw));
+            self.want_yaw = yaw;
+            self.physics = physics;
+            match mode {
+                Mode::Free => {
+                    self.mode = Mode::Free;
+                    self.restart = true;
+                    // Without a behaviour of its own (not patrolling) it stands idle again.
+                    if w.get(id).is_some_and(|e| e.behaviour.is_none()) {
+                        let a = self.own_idle.clone();
+                        self.loop_anim(w, id, &a);
+                        self.write(w, id);
+                    }
+                }
+                Mode::Still => self.idle(w, id),
+                other => self.mode = other,
+            }
+        }
     }
 
     /// Puts its position, facing and animation onto the object.
@@ -440,6 +586,38 @@ pub fn talk(w: &mut World, id: ActorId, seconds: f32) {
         let a = p.talk_start.clone();
         let start = p.play_once(w, id, &a);
         p.mode = Mode::Talk { left: seconds, phase: TalkPhase::Start, phase_left: start, poll: 0.0 };
+    });
+}
+
+/// Whether a character is emoting (its stop animation not begun yet).
+pub fn is_emoting(w: &World, id: ActorId) -> bool {
+    w.puppets.get(&id).is_some_and(|p| p.emoting)
+}
+
+/// Starts emote `name` lasting `seconds` (characters only; "none" or "" does nothing).
+pub fn emote(w: &mut World, id: ActorId, name: &str, seconds: f32) {
+    if name.is_empty() || name.eq_ignore_ascii_case("none") || kind_of(w, id) != Some(Kind::Character) {
+        return;
+    }
+    with(w, id, |p, w| {
+        if p.emoting {
+            return;
+        }
+        if let Some((_, e)) = p.emotes.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) {
+            p.emote = e.clone();
+        }
+        p.emote_back = Some((p.mode, p.physics, p.yaw));
+        p.emoting = true;
+        p.emote_left = seconds;
+        p.physics = false;
+        let phase = if p.emote.start.is_empty() {
+            if p.emote.looping.is_empty() { EmotePhase::Wait { poll: 0.0 } } else { EmotePhase::Loop }
+        } else {
+            let a = p.emote.start.clone();
+            EmotePhase::Start { left: p.play_once(w, id, &a) }
+        };
+        let turning = !matches!(phase, EmotePhase::Wait { .. });
+        p.mode = Mode::Emote { phase, turning };
     });
 }
 

@@ -31,6 +31,11 @@ impl Platform {
         self.window.size_in_pixels()
     }
 
+    /// The window's size in points (pixels on ordinary screens, half the pixels on Retina).
+    pub fn point_size(&self) -> (u32, u32) {
+        self.window.size()
+    }
+
     pub fn set_mouse_captured(&self, on: bool) {
         self.sdl.mouse().set_relative_mouse_mode(&self.window, on);
     }

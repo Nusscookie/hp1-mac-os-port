@@ -424,9 +424,16 @@ impl CutScene {
 
 /// A character's emote line: dialogue in `<…>`, an event in `[…]`. Returns how long to wait.
 fn emote_line(w: &mut World, who: ActorId, line: &str) -> f32 {
+    // A character already emoting skips the whole line.
+    if puppet::is_emoting(w, who) {
+        return 0.0;
+    }
     let mut seconds = 2.0;
     if let Some(id) = between(line, '<', '>') {
         seconds = crate::dialog::deliver(w, id);
+    }
+    if let Some(name) = between(line, '(', ')') {
+        puppet::emote(w, who, name, seconds);
     }
     if let Some(event) = between(line, '[', ']') {
         w.trigger_event(event, Some(who));

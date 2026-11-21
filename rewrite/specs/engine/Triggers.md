@@ -19,7 +19,13 @@ touching, it untriggers it.
 
 ## Dispatcher
 When triggered, it goes through its `OutEvents` in order, waiting `OutDelays[i]` before sending
-each one (so the delays add up). It ignores new triggers while it's busy.
+each one (so the delays add up). Empty slots are skipped together with their delays. It ignores
+new triggers while it's busy.
+
+Timing, as in the original engine (checked against SurrealEngine's `Sleep`): the dispatcher
+starts on its next tick after being triggered; each wait begins counting on the tick after it
+starts, and when it runs out the event is sent in that tick. Time left over in that tick is not
+carried into the next wait, so a wait of 0 still takes one tick.
 
 ## Counter
 Counts triggers; on the `NumToCount`-th it triggers its `Event`.

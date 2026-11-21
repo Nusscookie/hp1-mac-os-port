@@ -4,6 +4,7 @@
 
 mod audio;
 mod classes;
+mod fonts;
 mod levels;
 mod meshes;
 mod text;
@@ -16,6 +17,7 @@ use ue1_read::{Library, Package, Props, Reader, Value};
 
 pub use audio::convert_audio;
 pub use classes::convert_classes;
+pub use fonts::convert_fonts;
 pub use levels::convert_levels;
 pub use meshes::convert_meshes;
 pub use text::convert_text;
@@ -45,6 +47,7 @@ impl Converter {
         manifest.sections.insert("classes".into(), convert_classes(self)?);
         manifest.sections.insert("levels".into(), convert_levels(self)?);
         manifest.sections.insert("text".into(), convert_text(self, &self.game)?);
+        manifest.sections.insert("fonts".into(), convert_fonts(self)?);
         write_json(&self.out.join("manifest.json"), &manifest)?;
         Ok(manifest)
     }
@@ -100,6 +103,15 @@ pub fn prop_map(pkg: &Package, props: &Props) -> PropMap {
             out.insert(format!("{key}.alias"), DataValue::Str(alias));
             continue;
         }
+        if let Value::Struct(name, raw) = &p.value
+            && let Some(fields) = emote_entry(pkg, &name[..], &raw[..])
+        {
+            // A character's emote: its name and start, loop and stop animations.
+            for (field, value) in ["name", "start", "loop", "stop"].iter().zip(fields) {
+                out.insert(format!("{key}.{field}"), DataValue::Str(value));
+            }
+            continue;
+        }
         out.insert(key, data_value(pkg, &p.value));
     }
     out
@@ -116,6 +128,21 @@ fn cut_entry(pkg: &Package, name: &str, raw: &[u8]) -> Option<(DataValue, String
     let alias = r.string().ok()?;
     let actor = if obj.is_none() { DataValue::Null } else { DataValue::Str(pkg.ref_path(obj)) };
     Some((actor, alias))
+}
+
+/// A character's `Emote` entry: a name, then three animation names (`None` becomes empty).
+fn emote_entry(pkg: &Package, name: &str, raw: &[u8]) -> Option<[String; 4]> {
+    if !name.eq_ignore_ascii_case("Emote") {
+        return None;
+    }
+    let mut r = Reader::new(raw);
+    let emote = r.string().ok()?;
+    let mut anim = || {
+        let n = pkg.read_name(&mut r).ok()?;
+        Some(if n.eq_ignore_ascii_case("None") { String::new() } else { n.to_owned() })
+    };
+    let (start, looping, stop) = (anim()?, anim()?, anim()?);
+    (r.remaining() == 0).then_some([emote, start, looping, stop])
 }
 
 fn hex(raw: &[u8]) -> String {

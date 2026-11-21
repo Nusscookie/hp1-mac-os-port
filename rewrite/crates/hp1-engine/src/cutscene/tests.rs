@@ -335,3 +335,46 @@ fn a_patrolling_character_holds_still_for_the_scene_and_walks_on_when_released()
     assert_eq!(anim(&w, kid), "run");
     assert!(w.get(kid).unwrap().pos.x > held.x + 100.0, "walks on: {:?}", w.get(kid).unwrap().pos);
 }
+
+#[test]
+fn an_emote_turns_to_harry_plays_its_animations_and_turns_back() {
+    let mut dum = dumbledore(v(0.0, 0.0, 42.0));
+    dum.2.extend([
+        ("idleAnimName", s("Breathe")),
+        ("Emotes.name", s("Wave")),
+        ("Emotes.start", s("wave_start")),
+        ("Emotes.loop", s("wave")),
+        ("Emotes.stop", s("wave_stop")),
+    ]);
+    let mut w = floor_world(vec![
+        scene(&[("Dum", "Dumbledore")], &[&["Capture", "Emote0 <hello> (wave) [bell]"]], &[]),
+        dum,
+        ("Harry", "HPBase.baseHarry", vec![("Location", v(-200.0, 0.0, 42.0))]),
+        bell(),
+    ]);
+    w.player = Some(2);
+    w.lines = Box::new(ShortLines);
+    w.tick(0.1);
+    w.tick(0.1);
+    assert!(rang(&w));
+    assert!(puppet::is_emoting(&w, 1));
+    assert_eq!(anim(&w, 1), "wave_start");
+    // Harry is straight behind: half a turn at 50000 a second, then the loop animation.
+    for _ in 0..8 {
+        w.tick(0.1);
+    }
+    assert_eq!(anim(&w, 1), "wave");
+    let yaw = w.get(1).unwrap().rot[1];
+    assert!((yaw - 32768).abs() < 2000, "{yaw}");
+    // The line lasts 1.45 + 0.5 s; then the stop animation and back to standing, facing ahead.
+    let mut seen_stop = false;
+    for _ in 0..20 {
+        w.tick(0.1);
+        seen_stop |= anim(&w, 1) == "wave_stop";
+    }
+    assert!(seen_stop);
+    assert!(!puppet::is_emoting(&w, 1));
+    assert_eq!(anim(&w, 1), "Breathe");
+    let yaw = w.get(1).unwrap().rot[1];
+    assert!(!(2000..=63536).contains(&yaw), "{yaw}");
+}

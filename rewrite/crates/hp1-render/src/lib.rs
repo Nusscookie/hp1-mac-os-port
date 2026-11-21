@@ -7,6 +7,9 @@ use bytemuck::{Pod, Zeroable};
 use glam::Mat4;
 pub use wgpu;
 
+mod overlay;
+pub use overlay::{Overlay, Quad};
+
 /// An RGBA8 image.
 #[derive(Clone, Debug)]
 pub struct Image {
@@ -225,7 +228,12 @@ fn mip_chain(img: &Image) -> Vec<Image> {
     chain
 }
 
-fn upload_image(gpu: &Gpu, img: &Image, mips: bool, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
+pub(crate) fn upload_image(
+    gpu: &Gpu,
+    img: &Image,
+    mips: bool,
+    label: &str,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let chain = if mips { mip_chain(img) } else { vec![img.clone()] };
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -556,6 +564,7 @@ pub fn create_depth(gpu: &Gpu, width: u32, height: u32) -> wgpu::TextureView {
 }
 
 /// Renders once into an offscreen image (for screenshots and tests without a window).
+#[allow(clippy::too_many_arguments)]
 pub fn render_offscreen(
     gpu: &Gpu,
     renderer: &WorldRenderer,
@@ -564,6 +573,7 @@ pub fn render_offscreen(
     height: u32,
     view_proj: Mat4,
     sky_view: Option<Mat4>,
+    overlay: Option<(&Overlay, [f32; 2], &[Quad])>,
 ) -> Image {
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen"),
@@ -586,6 +596,9 @@ pub fn render_offscreen(
     });
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     renderer.draw(gpu, &mut encoder, scene, &view, &depth, view_proj, sky_view, [0.0; 3]);
+    if let Some((o, size, quads)) = overlay {
+        o.draw(gpu, &mut encoder, &view, size, quads);
+    }
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &target,

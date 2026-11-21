@@ -15,6 +15,7 @@
 //! levels/<Map>.level            LevelFile (binary); levels/<Map>.json is a readable summary
 //! classes.json                  ClassTable: every class's parent and default values
 //! text/<file>.json              TextFile: localized text and settings (e.g. text/hpdialog.int.json)
+//! fonts/<Package>.json          FontInfo list; the pages are textures from textures/
 //! ```
 
 use std::collections::BTreeMap;
@@ -25,7 +26,7 @@ pub mod level;
 pub mod mesh;
 
 /// Bumped whenever a converted file changes shape; the game asks for a re-convert on mismatch.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// A property value copied from the CD, in plain form. References to other objects become their
 /// full dotted path (`Package.Group.Name`).
@@ -218,6 +219,24 @@ pub struct TextureInfo {
     pub sparks: Vec<Spark>,
     /// Every property the CD stores for this texture (flags, animation chain, detail texture, …).
     pub props: PropMap,
+}
+
+/// A bitmap font: letters cut out of one or more page textures.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FontInfo {
+    /// Full path, e.g. `HPBase.MedInkFont`.
+    pub path: String,
+    pub pages: Vec<FontPage>,
+    /// How many characters each page holds; character `c` is on page `c / chars_per_page`.
+    pub chars_per_page: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FontPage {
+    /// Texture path (see `TextureInfo::path`).
+    pub texture: String,
+    /// Per character on this page: x, y, width, height in the texture's pixels.
+    pub chars: Vec<[i32; 4]>,
 }
 
 /// A sound effect, line of dialogue or piece of music. The file is the original audio stream from
