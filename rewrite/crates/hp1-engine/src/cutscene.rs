@@ -247,6 +247,10 @@ impl CutScene {
             return;
         }
         let line = self.scripts[i][self.cast[i].step].clone();
+        if w.trace_cutscenes && !line.is_empty() {
+            let scene = w.get(me).map_or("", |e| e.name.as_str()).to_owned();
+            w.note(format!("{scene} member {i} line {}: {line}", self.cast[i].step));
+        }
         self.command(w, me, i, actor, &line);
         self.cast[i].step += 1;
         if self.cast[i].step >= LINES {

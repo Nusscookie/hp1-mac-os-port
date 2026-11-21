@@ -301,6 +301,8 @@ pub struct World {
     pub lines: Box<dyn Lines>,
     /// Cutscene bars and spoken lines on screen.
     pub hud: crate::hud::Hud,
+    /// Report every cutscene line as it runs (as notes).
+    pub trace_cutscenes: bool,
     /// Characters and Harry while cutscenes drive them.
     pub(crate) puppets: HashMap<ActorId, Puppet>,
     /// Animation lengths per object, by lower-case sequence name (from the program's meshes).
@@ -336,6 +338,7 @@ impl World {
             cut_mode: false,
             lines: Box::new(NoLines),
             hud: Default::default(),
+            trace_cutscenes: false,
             puppets: HashMap::new(),
             sequences: HashMap::new(),
             touching: HashSet::new(),

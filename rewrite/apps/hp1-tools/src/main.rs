@@ -12,6 +12,7 @@
 //!   hp1-tools check-audio <converted>                   decode every sound and music file
 //!   hp1-tools walk <converted> <map> x,y,z x,y,z [radius] a character walking from A to B
 //!   hp1-tools patrol <converted> <map>                  patrol routes as the level links them
+//!   hp1-tools cutscenes <converted> <map> [filter]      plays each cutscene Harry walks into
 
 mod preview;
 
@@ -36,6 +37,7 @@ const USAGE: &str = "usage:
   hp1-tools collide <converted folder> <map>
   hp1-tools walk <converted folder> <map> <from x,y,z> <to x,y,z> [radius]
   hp1-tools patrol <converted folder> <map>
+  hp1-tools cutscenes <converted folder> <map> [cutscene name]
   hp1-tools sequences <converted folder> <anim file, e.g. anims/HarryPotter/skharryAnims.anim>";
 
 fn main() -> ExitCode {
@@ -67,6 +69,9 @@ fn main() -> ExitCode {
             preview::fire(Path::new(&args[1]), &args[2], Path::new(&args[3])).map(|_| ExitCode::SUCCESS)
         }
         Some("check-audio") if args.len() == 2 => cmd_check_audio(Path::new(&args[1])),
+        Some("cutscenes") if (3..=4).contains(&args.len()) => {
+            cmd_cutscenes(Path::new(&args[1]), &args[2], args.get(3).map(String::as_str))
+        }
         Some("collide") if args.len() == 3 => cmd_collide(Path::new(&args[1]), &args[2]),
         Some("patrol") if args.len() == 3 => cmd_patrol(Path::new(&args[1]), &args[2]),
         Some("walk") if (5..=6).contains(&args.len()) => cmd_walk(
@@ -542,4 +547,140 @@ fn cmd_check_audio(data: &Path) -> Result<ExitCode> {
         println!("{section}: {ok} decoded, {:.0} minutes", seconds / 60.0);
     }
     Ok(if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+}
+
+/// Dialogue text without voices (every line then lasts 3 s).
+struct TextLines(std::collections::HashMap<String, String>);
+
+impl hp1_engine::dialog::Lines for TextLines {
+    fn text(&self, id: &str) -> String {
+        self.0.get(&id.to_ascii_lowercase()).cloned().unwrap_or_default()
+    }
+    fn voice(&mut self, _id: &str) -> Option<(String, f32)> {
+        None
+    }
+}
+
+fn text_lines(data: &Path) -> TextLines {
+    let read = |name: &str| -> Option<serde_json::Value> {
+        serde_json::from_slice(&std::fs::read(data.join("text").join(name)).ok()?).ok()
+    };
+    let lang = read("default.ini.json")
+        .and_then(|v| v["Engine.Engine"]["Language"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| "int".into());
+    let all = read(&format!("hpdialog.{lang}.json")).or_else(|| read("hpdialog.int.json"));
+    TextLines(
+        all.and_then(|v| v.get("all").and_then(|a| a.as_object()).cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(k, v)| Some((k.to_ascii_lowercase(), v.as_str()?.to_owned())))
+            .collect(),
+    )
+}
+
+/// For each cutscene that starts when Harry walks into it: a fresh level, the intro played out,
+/// then Harry put inside the scene and the scene played for up to two minutes.
+fn cmd_cutscenes(data: &Path, map: &str, filter: Option<&str>) -> Result<ExitCode> {
+    use hp1_engine::world::{Output, World};
+    let level: hp1_data::level::LevelFile =
+        hp1_data::mesh::load_binary(&data.join("levels").join(format!("{map}.level")))?;
+    let classes: hp1_data::ClassTable = serde_json::from_slice(&std::fs::read(data.join("classes.json"))?)?;
+    let fresh = || {
+        let mut w = World::new(level.clone(), classes.clone());
+        w.player = w.placed_harry();
+        if let Some(e) = w.player.and_then(|h| w.get_mut(h)) {
+            (e.is_pawn, e.is_player, e.collide_actors) = (true, true, true);
+        }
+        w.lines = Box::new(text_lines(data));
+        w
+    };
+    const DT: f32 = 1.0 / 30.0;
+    // Plays until cutscene mode has been on and is off again (or `limit` seconds).
+    let trace = std::env::var_os("HP1_TRACE_CUTSCENES").is_some();
+    // (cutscene mode came on, when it went off again, lines the scene ran)
+    let play = |w: &mut World, limit: f32, report: bool| -> (bool, Option<f32>, usize) {
+        let (mut started, mut t, mut lines) = (false, 0.0, 0);
+        while t < limit {
+            w.tick(DT);
+            t += DT;
+            for o in w.outputs.drain(..) {
+                match o {
+                    Output::Message { text, .. } if report => println!("    {t:5.1} s  \"{text}\""),
+                    Output::Note(n) if report && n.contains(" member ") => {
+                        lines += 1;
+                        if trace {
+                            println!("    {t:5.1} s  {n}");
+                        }
+                    }
+                    Output::Note(n) if report => println!("    {t:5.1} s  note: {n}"),
+                    Output::ChangeLevel { map } if report => println!("    {t:5.1} s  go to level {map}"),
+                    _ => {}
+                }
+            }
+            started |= w.cut_mode;
+            if started && !w.cut_mode {
+                return (true, Some(t), lines);
+            }
+        }
+        (started, None, lines)
+    };
+    // (object, name, place, started by: None = level start, Some("") = walking in, Some(tag))
+    let scenes: Vec<(usize, String, glam::Vec3, Option<String>)> = {
+        let w = World::new(level.clone(), classes.clone());
+        level
+            .actors
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                let a = a.as_ref()?;
+                if !a.class.eq_ignore_ascii_case("HPBase.CutScene") {
+                    return None;
+                }
+                let p = hp1_engine::props::ActorProps::new(a, &w.classes);
+                let start = if p.bool("bLevelLoadStarts") {
+                    None
+                } else if p.bool_or("bTouchStarts", true) {
+                    Some(String::new())
+                } else {
+                    Some(w.get(i)?.tag.clone())
+                };
+                Some((i, a.name.clone(), w.get(i)?.pos, start))
+            })
+            .collect()
+    };
+    for (id, name, pos, start) in scenes {
+        if filter.is_some_and(|f| !name.eq_ignore_ascii_case(f)) {
+            continue;
+        }
+        let Some(tag) = start else {
+            println!("{name}: starts with the level");
+            continue;
+        };
+        let mut w = fresh();
+        play(&mut w, 120.0, false);
+        // Let the rest of the intro (camera, Dumbledore) finish too.
+        for _ in 0..(10.0 / DT) as usize {
+            w.tick(DT);
+        }
+        w.outputs.clear();
+        w.trace_cutscenes = true;
+        let Some(harry) = w.player else { break };
+        // Triggered scenes start near Harry in the game too.
+        if let Some(e) = w.get_mut(harry) {
+            e.pos = pos;
+        }
+        if tag.is_empty() {
+            println!("{name} (object {id}) at {pos:.0}, Harry walks in:");
+        } else {
+            w.trigger_event(&tag, None);
+            println!("{name} (object {id}) at {pos:.0}, triggered by {tag}:");
+        }
+        match play(&mut w, 60.0, true) {
+            (false, _, 0) => println!("    did not start"),
+            (false, _, n) => println!("    ran {n} lines without taking Harry (no cutscene mode)"),
+            (true, None, _) => println!("    still in cutscene mode after 60 s"),
+            (true, Some(t), _) => println!("    finished after {t:.1} s"),
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
