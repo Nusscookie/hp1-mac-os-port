@@ -99,9 +99,15 @@ impl Animation {
 pub struct Sequence {
     pub frames: u32,
     pub rate: f32,
+    /// How far the animation's root bone travels from its first key to its last (the
+    /// character's own movement in climb animations), in the character's facing frame.
+    pub travel: Vec3,
 }
 
 impl Sequence {
+    pub fn new(frames: u32, rate: f32) -> Self {
+        Self { frames, rate, travel: Vec3::ZERO }
+    }
     /// When playing it once ends: at its last frame, or after 0.1 s for a single frame.
     pub fn once(&self) -> f32 {
         if self.frames > 1 && self.rate > 0.0 { (self.frames - 1) as f32 / self.rate } else { 0.1 }
@@ -426,7 +432,8 @@ impl World {
         !name.is_empty() && self.sequences.get(&id).is_none_or(|m| m.contains_key(&name.to_ascii_lowercase()))
     }
 
-    pub(crate) fn sequence(&self, id: ActorId, name: &str) -> Option<Sequence> {
+    /// The length (and own travel) of animation `name` of object `id`, if known.
+    pub fn sequence(&self, id: ActorId, name: &str) -> Option<Sequence> {
         self.sequences.get(&id)?.get(&name.to_ascii_lowercase()).copied()
     }
 
@@ -584,6 +591,11 @@ impl World {
     }
 
     pub fn sound(&mut self, from: ActorId, path: &str) {
+        self.sound_scaled(from, path, 1.0);
+    }
+
+    /// A sound at `scale` times the object's volume.
+    pub fn sound_scaled(&mut self, from: ActorId, path: &str, scale: f32) {
         let Some(e) = self.get(from) else { return };
         if path.is_empty() {
             return;
@@ -592,7 +604,7 @@ impl World {
             path: path.to_owned(),
             at: e.pos,
             radius: e.sound_radius,
-            volume: e.sound_volume,
+            volume: e.sound_volume * scale,
         };
         self.outputs.push(out);
     }

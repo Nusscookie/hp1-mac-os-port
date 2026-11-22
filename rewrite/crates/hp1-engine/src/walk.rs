@@ -51,6 +51,8 @@ pub struct Body {
     pub base: Option<usize>,
     /// An actor it walked into during the last tick (doors open when bumped).
     pub bumped: Option<usize>,
+    /// The normal of a wall it couldn't get past during the last tick (not stepped over).
+    pub wall: Option<Vec3>,
 }
 
 impl Body {
@@ -62,6 +64,7 @@ impl Body {
             mode: Mode::Falling,
             base: None,
             bumped: None,
+            wall: None,
         }
     }
 
@@ -77,6 +80,7 @@ impl Body {
         if dt <= 0.0 {
             return;
         }
+        self.wall = None;
         if model.overlaps(self.pos, self.extent) {
             self.settle(model);
         }
@@ -154,6 +158,7 @@ impl Body {
                     self.slide(model, left, hit.normal);
                 } else if !self.step_up(model, left, m.step_height) {
                     self.bumped = hit.actor.or(self.bumped);
+                    self.wall = Some(hit.normal);
                     self.slide(model, left, horizontal(hit.normal));
                     // Lose the speed that went into the wall, so it doesn't build up.
                     let moved = (self.pos - start).xy() / dt;
@@ -239,6 +244,9 @@ impl Body {
                 self.vel.z = 0.0;
                 return;
             }
+            if normal.z.abs() < WALKABLE_Z {
+                self.wall = Some(normal);
+            }
             // Slide along walls and ceilings, losing the speed going into them.
             self.vel -= normal * self.vel.dot(normal).min(0.0);
             let rest = delta * (1.0 - time);
@@ -247,7 +255,7 @@ impl Body {
     }
 }
 
-fn horizontal(n: Vec3) -> Vec3 {
+pub(crate) fn horizontal(n: Vec3) -> Vec3 {
     let h = Vec3::new(n.x, n.y, 0.0);
     if h.length_squared() > 1e-6 { h.normalize() } else { n }
 }

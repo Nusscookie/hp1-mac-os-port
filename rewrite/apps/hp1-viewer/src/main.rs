@@ -47,11 +47,15 @@ struct Args {
     trigger: Vec<String>,
     run: f32,
     walk: bool,
+    /// Shot mode: Harry walks forward the whole time.
+    forward: bool,
+    /// Testing: the level's cutscenes don't run.
+    no_cutscenes: bool,
 }
 
 fn parse_args() -> Result<Args> {
     let mut it = std::env::args().skip(1);
-    let usage = "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH] [--music <name>] [--mute] [--trigger <tag>] [--run <seconds>] [--walk]";
+    let usage = "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH] [--music <name>] [--mute] [--trigger <tag>] [--run <seconds>] [--walk] [--forward] [--no-cutscenes]";
     let data = PathBuf::from(it.next().context(usage)?);
     let map = it.next().context(usage)?;
     let mut args = Args {
@@ -66,8 +70,18 @@ fn parse_args() -> Result<Args> {
         trigger: Vec::new(),
         run: 0.0,
         walk: false,
+        forward: false,
+        no_cutscenes: false,
     };
     while let Some(a) = it.next() {
+        if a == "--forward" || a == "--no-cutscenes" {
+            if a == "--forward" {
+                args.forward = true;
+            } else {
+                args.no_cutscenes = true;
+            }
+            continue;
+        }
         if a == "--mute" || a == "--walk" {
             if a == "--mute" {
                 args.mute = true;
@@ -419,6 +433,14 @@ fn main() -> Result<()> {
     }
     loaded.world.lines = Box::new(sound::DialogLines::open(&args.data)?);
     loaded.actors.drive(&loaded.world);
+    if args.no_cutscenes {
+        let classes = loaded.world.classes.clone();
+        for e in loaded.world.actors.iter_mut().flatten() {
+            if classes.is_a(&e.class, "HPBase.CutScene") {
+                e.behaviour = None;
+            }
+        }
+    }
     let mut cut_mode = false;
 
     if let Some(out) = &args.shot {
@@ -448,14 +470,8 @@ fn main() -> Result<()> {
         for _ in 0..frames {
             loaded.world.tick(1.0 / 60.0);
             if let Some(p) = &mut walker {
-                camera = Camera::looking(walk_frame(
-                    &mut loaded.world,
-                    p,
-                    harry,
-                    glam::Vec2::ZERO,
-                    false,
-                    1.0 / 60.0,
-                ));
+                let input = if args.forward { glam::Vec2::X } else { glam::Vec2::ZERO };
+                camera = Camera::looking(walk_frame(&mut loaded.world, p, harry, input, false, 1.0 / 60.0));
             } else if loaded.world.camera.active {
                 camera = Camera::looking(loaded.world.camera.view());
             }

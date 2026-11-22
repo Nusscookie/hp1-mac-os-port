@@ -118,7 +118,16 @@ fn lengths(inst: &Instance) -> Option<Vec<(String, Sequence)>> {
     Some(
         anim.sequences
             .iter()
-            .map(|s| (s.info.name.clone(), Sequence { frames: s.info.frames, rate: s.info.rate }))
+            .map(|s| {
+                // The root bone (the first) carries the movement of animations that move the
+                // character themselves, such as climbing.
+                let travel = s
+                    .tracks
+                    .first()
+                    .and_then(|t| Some(Vec3::from(*t.positions.last()?) - Vec3::from(*t.positions.first()?)))
+                    .unwrap_or(Vec3::ZERO);
+                (s.info.name.clone(), Sequence { frames: s.info.frames, rate: s.info.rate, travel })
+            })
             .collect(),
     )
 }

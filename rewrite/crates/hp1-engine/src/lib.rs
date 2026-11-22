@@ -6,6 +6,7 @@ pub mod behaviours;
 pub mod bsp;
 pub mod camera;
 pub mod character;
+pub mod climb;
 pub mod collision;
 pub mod cutscene;
 pub mod dialog;

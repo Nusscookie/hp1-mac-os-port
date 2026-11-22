@@ -2,6 +2,7 @@
 
 use glam::{Vec2, Vec3};
 use hp1_engine::camera::{FollowCamera, View};
+use hp1_engine::climb::{Climb, MAX_MOUNT, find_ledge};
 use hp1_engine::units::ROT_TO_RAD;
 use hp1_engine::walk::{Body, Mode, Movement};
 use hp1_engine::world::{ActorId, Animation, World};
@@ -17,6 +18,8 @@ pub struct Player {
     pub anim: String,
     pub anim_time: f32,
     movement: Movement,
+    /// Pulling himself up onto a ledge.
+    climb: Option<Climb>,
     /// Position and facing last written to Harry's object, to notice when a cutscene moved him.
     synced: (Vec3, i32),
 }
@@ -36,6 +39,7 @@ impl Player {
             anim: "breath".into(),
             anim_time: 0.0,
             movement: Movement::default(),
+            climb: None,
             synced: (Vec3::NAN, 0),
         }
     }
@@ -43,6 +47,7 @@ impl Player {
     /// Takes Harry's place, facing and animation from the world (after a cutscene had him).
     pub fn adopt(&mut self, world: &World, me: ActorId) {
         let Some(e) = world.get(me) else { return };
+        self.climb = None;
         self.body.pos = e.pos;
         self.body.vel = Vec3::ZERO;
         self.yaw = e.rot[1] as f32 * ROT_TO_RAD;
@@ -79,18 +84,39 @@ impl Player {
         if let Some(moved) = self.body.base.and_then(|b| world.get(b)).map(|e| e.moved) {
             self.body.pos += moved;
         }
-        // Small fixed steps keep the movement the same at any frame rate.
-        let steps = (dt / (1.0 / 120.0)).ceil().max(1.0);
-        for i in 0..steps as usize {
-            self.body.tick(
-                &world.collider(Some(me)),
-                &self.movement,
-                wish,
-                jump && can_jump && i == 0,
-                dt / steps,
-            );
-            if let Some(b) = self.body.bumped.take() {
-                world.bump(b, me);
+        let before = self.body.pos;
+        // Small fixed steps keep the movement the same at any frame rate. While climbing, only
+        // hanging on (still falling) moves him by physics.
+        if self.climb.as_ref().is_none_or(Climb::hanging) {
+            let steps = (dt / (1.0 / 120.0)).ceil().max(1.0);
+            for i in 0..steps as usize {
+                let collider = world.collider(Some(me));
+                self.body.tick(&collider, &self.movement, wish, jump && can_jump && i == 0, dt / steps);
+                if self.climb.is_none()
+                    && let Some(dest) =
+                        find_ledge(&collider, &self.body, wish, self.movement.step_height, MAX_MOUNT)
+                {
+                    self.climb = Some(Climb::start(&self.body, dest));
+                }
+                if let Some(b) = self.body.bumped.take() {
+                    world.bump(b, me);
+                }
+            }
+        }
+        let mut focus = self.body.pos;
+        if let Some(c) = &mut self.climb {
+            let seq = |name: &str| world.sequence(me, name);
+            let moved = self.body.pos - before;
+            let f = c.tick(&mut self.body, &mut self.yaw, moved, dt, &seq);
+            if let Some(sound) = f.sound {
+                world.sound_scaled(me, sound, 0.5);
+            }
+            focus = f.focus;
+            if f.done {
+                self.climb = None;
+                self.anim.clear();
+            } else {
+                (self.anim, self.anim_time) = (c.anim.to_owned(), c.anim_time);
             }
         }
         if let Some(e) = world.get_mut(me) {
@@ -100,6 +126,12 @@ impl Player {
             self.synced = (e.pos, e.rot[1]);
         }
 
+        if self.climb.is_some() {
+            if let Some(e) = world.get_mut(me) {
+                e.anim = Some(Animation { name: self.anim.clone(), time: self.anim_time, looping: false });
+            }
+            return self.cam.update(&world.collider(Some(me)), focus, self.yaw, EYE, true, dt);
+        }
         let v = self.body.vel;
         let (ahead, side) = (v.dot(forward), v.dot(right));
         let anim = match self.body.mode {

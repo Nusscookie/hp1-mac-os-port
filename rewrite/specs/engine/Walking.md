@@ -35,6 +35,8 @@ SurrealEngine; the maps turn these only by quarter turns, so the upright box aro
 (Tut1 uses a thin one along the main staircase.)
 
 ## Reacts to
+- Harry walking or jumping into a wall he can't step over may climb onto it, if it is a ledge
+  within reach (`specs/characters/Climbing.md`; when that happens is our own rule).
 - Spawning inside the level geometry: it is moved to the nearest free spot (first upwards, then
   around), so placed characters that touch the floor a little are not stuck.
 

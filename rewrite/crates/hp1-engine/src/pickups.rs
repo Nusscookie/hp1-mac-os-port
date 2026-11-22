@@ -301,7 +301,7 @@ mod tests {
                 glow: true,
             }),
         );
-        let one = Sequence { frames: 11, rate: 10.0 };
+        let one = Sequence::new(11, 10.0);
         w.set_sequences(frog, [("CROAK".into(), one), ("hop".into(), one), ("BREATH".into(), one)]);
         w.tick(0.1);
         assert_eq!(w.get(frog).unwrap().anim.as_ref().unwrap().name, "CROAK");

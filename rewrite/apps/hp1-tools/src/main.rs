@@ -472,10 +472,27 @@ fn cmd_collide(data: &Path, map: &str) -> Result<ExitCode> {
 
 fn cmd_sequences(file: &Path) -> Result<ExitCode> {
     let anim: hp1_data::mesh::AnimFile = hp1_data::mesh::load_binary(file)?;
+    // The bone that carries the character's own movement in root-motion animations.
+    // (HP1's skeletons have no bone of that name; the root and pelvis show the movement.)
+    let mover = anim.bones.iter().position(|b| b.name.trim().eq_ignore_ascii_case("move"));
+    let mover = mover.or(Some(0).filter(|&i| i < anim.bones.len()));
     for s in &anim.sequences {
+        let moved = mover.and_then(|i| s.tracks.get(i)).and_then(|t| {
+            let (a, b) = (t.positions.first()?, t.positions.last()?);
+            Some(format!(
+                "  {} {:?} -> {:?}",
+                anim.bones[mover?].name,
+                a.map(|v| v.round()),
+                b.map(|v| v.round())
+            ))
+        });
         println!(
-            "{:24} {:4} frames {:5.1} fps {:6.2} s",
-            s.info.name, s.info.frames, s.info.rate, s.duration
+            "{:24} {:4} frames {:5.1} fps {:6.2} s{}",
+            s.info.name,
+            s.info.frames,
+            s.info.rate,
+            s.duration,
+            moved.unwrap_or_default()
         );
     }
     Ok(ExitCode::SUCCESS)
