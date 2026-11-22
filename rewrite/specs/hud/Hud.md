@@ -45,6 +45,11 @@ Letters: a character's rectangle is found by walking the font's pages (character
 the earlier pages' counts). A character with no width there uses its capital letter, and failing
 that a space. Letters sit side by side with no extra spacing.
 
+## Countdown and lesson popups
+The countdown bar and the spell lesson's grade and final-score popups are described with the
+lesson (`specs/spells/SpellLesson.md`, Popups and HUD). The countdown is drawn with the health
+bar, outside cutscene mode; popups are drawn last, over everything, also in cutscene mode.
+
 ## Screen size
 The original drew in screen pixels. Here the HUD works in the window's size in points, so a
 high-density (Retina) screen shows it at the same size as an ordinary one of that size.

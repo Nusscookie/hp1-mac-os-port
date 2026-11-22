@@ -14,6 +14,8 @@ pub fn make(class: &str, p: &ActorProps, classes: &ClassTable) -> Option<Box<dyn
         Some(Box::new(Mover::new(p)))
     } else if is("HPBase.TriggerSpwnBsChrOnPPnt") {
         Some(Box::new(crate::character::SpawnOnPatrol::new(p)))
+    } else if is("HPBase.SpellLearnTrigger") {
+        Some(Box::new(crate::lesson::SpellLesson::new(p, classes)))
     } else if is("Engine.Trigger") {
         Some(Box::new(Trigger::new(p)))
     } else if is("Engine.Dispatcher") {

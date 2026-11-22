@@ -190,7 +190,7 @@ impl Actors {
             }
         }
         // Characters that triggers can spawn during play.
-        let spawnable: std::collections::BTreeSet<String> = level
+        let mut spawnable: std::collections::BTreeSet<String> = level
             .actors
             .iter()
             .flatten()
@@ -198,6 +198,15 @@ impl Actors {
             .filter(|(k, _)| k.starts_with("BaseCharToSpawn"))
             .filter_map(|(_, v)| v.as_str().map(str::to_owned))
             .collect();
+        // The wands spell lessons hold up.
+        spawnable.extend(
+            level
+                .actors
+                .iter()
+                .flatten()
+                .map(|a| ActorProps::new(a, classes).text("WandClass"))
+                .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("None")),
+        );
         for class in spawnable {
             let actor = hp1_data::level::Actor {
                 name: class.clone(),
@@ -222,6 +231,8 @@ impl Actors {
             if let Some(t) = self.templates.get(&a.class.to_ascii_lowercase()) {
                 let mut inst = t.clone();
                 inst.actor = Some(id);
+                // Spawned objects are wherever the world puts them.
+                inst.follows = true;
                 self.moving.push(inst);
             }
         }

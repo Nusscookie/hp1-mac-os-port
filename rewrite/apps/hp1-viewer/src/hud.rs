@@ -42,8 +42,14 @@ fn load_fonts(data: &Path) -> Option<HudFonts> {
     let list: Vec<FontInfo> =
         serde_json::from_slice(&std::fs::read(data.join("fonts").join("HPBase.json")).ok()?).ok()?;
     let find = |path: &str| list.iter().find(|f| f.path.eq_ignore_ascii_case(path)).cloned().map(Font::new);
-    let (message, small) = HudFonts::names(&language(data));
-    Some(HudFonts { message: find(message)?, small: find(small)?, numbers: find(HudFonts::NUMBERS)? })
+    let lang = language(data);
+    let (message, small) = HudFonts::names(&lang);
+    Some(HudFonts {
+        message: find(message)?,
+        small: find(small)?,
+        numbers: find(HudFonts::NUMBERS)?,
+        big: find(HudFonts::big_name(&lang))?,
+    })
 }
 
 impl HudDraw {

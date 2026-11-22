@@ -267,6 +267,20 @@ pub struct ClassEntry {
     pub defaults: PropMap,
 }
 
+/// A spell's pattern: points in the unit square (x right, y down), as one line through them in
+/// order. `segments` is kept as saved; nothing known reads it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gesture {
+    pub points: Vec<[f32; 3]>,
+    pub segments: Vec<i32>,
+}
+
+/// All spell gestures by full path (`HPBase.FlipPattern`, …).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GestureTable {
+    pub gestures: BTreeMap<String, Gesture>,
+}
+
 /// All classes by full path (`HPBase.harry`, `Engine.Actor`, …).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ClassTable {

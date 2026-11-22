@@ -118,6 +118,17 @@ impl Sequence {
     }
 }
 
+/// What the player does with the wand during a spell lesson.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WandInput {
+    /// Mouse movement in pixels since the lesson last looked (x right, y down).
+    pub mouse: glam::Vec2,
+    /// Move keys: side (right +) and forward (+) / back (−), each −1..1.
+    pub keys: glam::Vec2,
+    /// The draw button (the original's AltFire) is held.
+    pub draw: bool,
+}
+
 /// Harry's counters (`specs/props/Pickups.md`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stats {
@@ -126,6 +137,8 @@ pub struct Stats {
     pub health: f32,
     /// `MaxLifePotions`.
     pub max_health: f32,
+    /// House points won (for Gryffindor).
+    pub house_points: i32,
 }
 
 impl Stats {
@@ -133,7 +146,12 @@ impl Stats {
     pub fn for_class(classes: &ClassTable, class: &str) -> Self {
         let d = classes.effective_defaults(class);
         let f = |k: &str, or: f32| d.get(k).and_then(hp1_data::DataValue::as_f32).unwrap_or(or);
-        Self { beans: 0, health: f("lifePotions", 50.0), max_health: f("MaxLifePotions", 50.0) }
+        Self {
+            beans: 0,
+            health: f("lifePotions", 50.0),
+            max_health: f("MaxLifePotions", 50.0),
+            house_points: 0,
+        }
     }
     /// More health, up to the maximum.
     pub fn add_health(&mut self, n: f32) {
@@ -340,6 +358,15 @@ pub struct World {
     pub stats: Stats,
     /// Where the player looks from, set by the program each frame (for things flying to the HUD).
     pub view: Option<crate::camera::View>,
+    /// Spell patterns by full path (`HPBase.FlipPattern`), from the program.
+    pub gestures: HashMap<String, crate::gesture::Pattern>,
+    /// The wand input for spell lessons; the program adds to it each frame.
+    pub wand_input: WandInput,
+    /// A spell lesson takes the mouse and move keys for the wand.
+    pub wand_wanted: bool,
+    /// While tracing: the wand as a pattern point and the pattern's path (for the program's own
+    /// use, e.g. an automatic tracer in tests).
+    pub wand_at: Option<(glam::Vec2, String)>,
     /// Particle systems of `ParticleFX` objects.
     pub particles: HashMap<ActorId, crate::particles::System>,
     /// Gravity in zones (the default zone's; per-zone values are not read yet).
@@ -400,6 +427,10 @@ impl World {
             stats,
             view: None,
             particles,
+            gestures: HashMap::new(),
+            wand_input: WandInput::default(),
+            wand_wanted: false,
+            wand_at: None,
             zone_gravity,
             puppets: HashMap::new(),
             sequences: HashMap::new(),
@@ -634,7 +665,11 @@ impl World {
         }
         self.tick_particles(dt);
         self.fade.tick(dt);
-        self.hud.tick(dt);
+        if let Some(sound) = self.hud.tick(dt, self.cut_mode)
+            && let Some(harry) = self.player
+        {
+            self.sound_scaled(harry, sound, 0.5);
+        }
         self.update_touches();
     }
 

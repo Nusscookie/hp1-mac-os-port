@@ -164,6 +164,10 @@ const VOICE: usize = usize::MAX;
 pub struct DialogLines {
     text: HashMap<String, String>,
     sounds: Library,
+    text_dir: std::path::PathBuf,
+    lang: String,
+    /// Localized text files read so far, by lower-case name.
+    files: std::cell::RefCell<HashMap<String, Option<serde_json::Value>>>,
 }
 
 impl DialogLines {
@@ -186,13 +190,33 @@ impl DialogLines {
             )
         };
         let text = read(&lang).or_else(|| read("int")).unwrap_or_default();
-        Ok(Self { text, sounds: Library::open(data)? })
+        Ok(Self { text, sounds: Library::open(data)?, text_dir, lang, files: Default::default() })
     }
 }
 
 impl hp1_engine::dialog::Lines for DialogLines {
     fn text(&self, id: &str) -> String {
         self.text.get(&id.to_ascii_lowercase()).cloned().unwrap_or_default()
+    }
+
+    fn localized(&self, file: &str, section: &str, key: &str) -> String {
+        let file = file.to_ascii_lowercase();
+        let mut files = self.files.borrow_mut();
+        let v = files.entry(file.clone()).or_insert_with(|| {
+            let read = |ext: &str| {
+                let bytes = std::fs::read(self.text_dir.join(format!("{file}.{ext}.json"))).ok()?;
+                serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+            };
+            read(&self.lang).or_else(|| read("int"))
+        });
+        let find = |o: &serde_json::Value, k: &str| {
+            o.as_object()?.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.clone())
+        };
+        v.as_ref()
+            .and_then(|v| find(v, section))
+            .and_then(|s| find(&s, key))
+            .and_then(|t| t.as_str().map(str::to_owned))
+            .unwrap_or_default()
     }
 
     fn voice(&mut self, id: &str) -> Option<(String, f32)> {

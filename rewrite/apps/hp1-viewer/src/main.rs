@@ -16,21 +16,24 @@ mod player;
 mod sound;
 mod textures;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use glam::{Mat4, Vec3};
-use hp1_data::ClassTable;
 use hp1_data::level::LevelFile;
 use hp1_data::mesh::load_binary;
+use hp1_data::{ClassTable, GestureTable};
+use hp1_engine::gesture::Pattern;
 use hp1_engine::level_mesh::{LightPacker, build_model_mesh};
 use hp1_engine::lighting::build_level_light_maps;
 use hp1_engine::props::ActorProps;
 use hp1_engine::units::{ROT_TO_RAD, rotator_matrix};
-use hp1_engine::world::{Entity, Output, World};
+use hp1_engine::world::{Entity, Output, WandInput, World};
 use hp1_platform::sdl3::event::{Event, WindowEvent};
 use hp1_platform::sdl3::keyboard::{Keycode, Scancode};
+use hp1_platform::sdl3::mouse::MouseButton;
 use hp1_render::{DrawBatch, Geometry, Gpu, Image, Scene, SceneDesc, Vertex, WorldRenderer, wgpu};
 use textures::Textures;
 
@@ -51,11 +54,14 @@ struct Args {
     forward: bool,
     /// Testing: the level's cutscenes don't run.
     no_cutscenes: bool,
+    /// Shot mode: spell lessons are traced by themselves in this many seconds, up to a part of
+    /// the pattern (`seconds[,part]`).
+    trace: Option<(f32, f32)>,
 }
 
 fn parse_args() -> Result<Args> {
     let mut it = std::env::args().skip(1);
-    let usage = "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH] [--music <name>] [--mute] [--trigger <tag>] [--run <seconds>] [--walk] [--forward] [--no-cutscenes]";
+    let usage = "usage: hp1-viewer <converted folder> <map> [--shot out.png] [--camera x,y,z,yaw,pitch] [--size WxH] [--music <name>] [--mute] [--trigger <tag>] [--run <seconds>] [--walk] [--forward] [--no-cutscenes] [--trace <seconds>[,part]]";
     let data = PathBuf::from(it.next().context(usage)?);
     let map = it.next().context(usage)?;
     let mut args = Args {
@@ -72,6 +78,7 @@ fn parse_args() -> Result<Args> {
         walk: false,
         forward: false,
         no_cutscenes: false,
+        trace: None,
     };
     while let Some(a) = it.next() {
         if a == "--forward" || a == "--no-cutscenes" {
@@ -96,6 +103,10 @@ fn parse_args() -> Result<Args> {
             "--music" => args.music = Some(v),
             "--trigger" => args.trigger.push(v),
             "--run" => args.run = v.parse()?,
+            "--trace" => {
+                let (secs, part) = v.split_once(',').unwrap_or((&v, "1"));
+                args.trace = Some((secs.trim().parse()?, part.trim().parse()?));
+            }
             "--camera" | "--view" => {
                 let n: Vec<f32> = v.split(',').map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
                 let n: [f32; 5] = n.try_into().map_err(|_| anyhow!("{a} wants 5 numbers"))?;
@@ -367,7 +378,7 @@ fn report(world: &mut World, cut_mode: &mut bool) {
     });
     if world.cut_mode != *cut_mode {
         *cut_mode = world.cut_mode;
-        println!("cutscene mode {}", if world.cut_mode { "on" } else { "off" });
+        println!("cutscene mode {} at {:.1} s", if world.cut_mode { "on" } else { "off" }, world.time);
     }
 }
 
@@ -398,6 +409,29 @@ fn walk_frame(
         world.camera.follow(view);
         view
     }
+}
+
+/// The spell patterns (`gestures.json`).
+fn load_gestures(data: &Path) -> HashMap<String, Pattern> {
+    let table: GestureTable = std::fs::read(data.join("gestures.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    table.gestures.iter().map(|(k, g)| (k.clone(), Pattern::from_data(g))).collect()
+}
+
+/// Shot mode: moves the wand along the lesson's pattern by itself, reaching `part` of it after
+/// `seconds`, with the draw button held until then.
+fn auto_trace(world: &World, (seconds, part): (f32, f32), traced: &mut f32, dt: f32) -> WandInput {
+    let mut input = WandInput { draw: *traced / seconds < part, ..Default::default() };
+    if let Some((at, path)) = &world.wand_at
+        && let Some(pattern) = world.gestures.get(path)
+    {
+        *traced += dt;
+        let target = pattern.along((*traced / seconds).min(part));
+        input.mouse = (target - *at) / hp1_engine::lesson::WAND_PER_PIXEL;
+    }
+    input
 }
 
 fn main() -> Result<()> {
@@ -432,6 +466,7 @@ fn main() -> Result<()> {
         loaded.world.set_sequences(harry, list);
     }
     loaded.world.lines = Box::new(sound::DialogLines::open(&args.data)?);
+    loaded.world.gestures = load_gestures(&args.data);
     loaded.actors.drive(&loaded.world);
     if args.no_cutscenes {
         let classes = loaded.world.classes.clone();
@@ -467,7 +502,15 @@ fn main() -> Result<()> {
             player::Player::new(&loaded.world, harry, start, camera.yaw)
         });
         let frames = (args.run * 60.0) as usize + if args.walk { 60 } else { 0 };
+        let mut traced = 0.0;
         for _ in 0..frames {
+            if let Some(trace) = args.trace {
+                if loaded.world.wand_wanted {
+                    loaded.world.wand_input = auto_trace(&loaded.world, trace, &mut traced, 1.0 / 60.0);
+                } else {
+                    traced = 0.0;
+                }
+            }
             loaded.world.tick(1.0 / 60.0);
             if let Some(p) = &mut walker {
                 let input = if args.forward { glam::Vec2::X } else { glam::Vec2::ZERO };
@@ -607,6 +650,7 @@ fn main() -> Result<()> {
 
     let mut walker: Option<player::Player> = None;
     let mut jump = false;
+    let mut draw_held = false;
 
     platform.set_mouse_captured(true);
     let mut last = Instant::now();
@@ -644,6 +688,11 @@ fn main() -> Result<()> {
                     println!("{}", if walker.is_some() { "walking" } else { "flying" });
                 }
                 Event::KeyDown { keycode: Some(Keycode::Space), repeat: false, .. } => jump = true,
+                Event::MouseButtonDown { mouse_btn: MouseButton::Right, .. } => draw_held = true,
+                Event::MouseButtonUp { mouse_btn: MouseButton::Right, .. } => draw_held = false,
+                Event::MouseMotion { xrel, yrel, .. } if loaded.world.wand_wanted => {
+                    loaded.world.wand_input.mouse += glam::Vec2::new(xrel, yrel);
+                }
                 Event::MouseMotion { xrel, yrel, .. } => match &mut walker {
                     Some(p) => {
                         p.yaw += xrel * 0.003;
@@ -684,6 +733,14 @@ fn main() -> Result<()> {
             }
         }
         let world = &mut loaded.world;
+        if world.wand_wanted {
+            let pressed = |k| if keys.is_scancode_pressed(k) { 1.0 } else { 0.0 };
+            world.wand_input.draw = draw_held;
+            world.wand_input.keys = glam::Vec2::new(
+                pressed(Scancode::D) - pressed(Scancode::A),
+                pressed(Scancode::W) - pressed(Scancode::S),
+            );
+        }
         world.tick(dt);
         if let Some(p) = &mut walker {
             let pressed = |k| if keys.is_scancode_pressed(k) { 1.0 } else { 0.0 };

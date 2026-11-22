@@ -621,6 +621,23 @@ pub fn emote(w: &mut World, id: ActorId, name: &str, seconds: f32) {
     });
 }
 
+/// Stands still looping `name`.
+pub fn loop_anim(w: &mut World, id: ActorId, name: &str) {
+    with(w, id, |p, w| {
+        p.physics = false;
+        p.mode = Mode::Still;
+        p.loop_anim(w, id, name);
+    });
+}
+
+/// Moves it to `pos` and has it stand there (Harry drops onto the floor below).
+pub fn put(w: &mut World, id: ActorId, pos: Vec3) {
+    with(w, id, |p, w| {
+        p.body.pos = pos;
+        p.idle(w, id);
+    });
+}
+
 pub fn set_idle(w: &mut World, id: ActorId, name: &str) {
     with(w, id, |p, _| p.idle_anim = name.to_owned());
 }

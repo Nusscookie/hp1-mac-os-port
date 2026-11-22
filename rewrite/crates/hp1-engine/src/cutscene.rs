@@ -544,6 +544,22 @@ fn leave_camera(w: &mut World, pop: bool, restore_place: bool) {
     w.camera.left = true;
 }
 
+/// Takes the camera (saving its settings) and holds it at `pos`, turned to `rot` (spell
+/// lessons: `SaveState`, then the cutscene state with nothing to fly to).
+pub(crate) fn hold_camera(w: &mut World, pos: Vec3, rot: [i32; 3]) {
+    enter_camera(w);
+    let c = &mut w.camera;
+    (c.position, c.direction, c.notify) = (None, None, None);
+    c.rot = rot;
+    c.desired = rot;
+    set_camera_pos(w, pos);
+}
+
+/// Gives the camera back as it was saved (`RestoreState`).
+pub(crate) fn release_camera(w: &mut World) {
+    leave_camera(w, true, true);
+}
+
 /// One tick of the camera; returns the cue to give when it reaches its spot.
 pub(crate) fn tick_camera(w: &mut World, dt: f32) -> Option<(ActorId, String)> {
     if !w.camera.active {

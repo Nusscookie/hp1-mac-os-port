@@ -5,6 +5,7 @@
 mod audio;
 mod classes;
 mod fonts;
+mod gestures;
 mod levels;
 mod meshes;
 mod text;
@@ -18,6 +19,7 @@ use ue1_read::{Library, Package, Props, Reader, Value};
 pub use audio::convert_audio;
 pub use classes::convert_classes;
 pub use fonts::convert_fonts;
+pub use gestures::convert_gestures;
 pub use levels::convert_levels;
 pub use meshes::convert_meshes;
 pub use text::convert_text;
@@ -45,6 +47,7 @@ impl Converter {
         manifest.sections.insert("music".into(), convert_audio(self, "Music", "music")?);
         manifest.sections.insert("meshes".into(), convert_meshes(self)?);
         manifest.sections.insert("classes".into(), convert_classes(self)?);
+        manifest.sections.insert("gestures".into(), convert_gestures(self)?);
         manifest.sections.insert("levels".into(), convert_levels(self)?);
         manifest.sections.insert("text".into(), convert_text(self, &self.game)?);
         manifest.sections.insert("fonts".into(), convert_fonts(self)?);

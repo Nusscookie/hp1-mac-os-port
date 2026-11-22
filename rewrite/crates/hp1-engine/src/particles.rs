@@ -6,6 +6,7 @@ use glam::{Mat3, Vec3};
 use hp1_data::DataValue;
 
 use crate::camera::View;
+use crate::gesture::Pattern;
 use crate::props::ActorProps;
 use crate::units::rotator_matrix;
 
@@ -97,6 +98,12 @@ pub struct Settings {
     pub primitive: Primitive,
     pub emit: bool,
     pub blend: Blend,
+    /// `Distribution` uniform: spread along the way covered as well as over time (our rule).
+    pub uniform: bool,
+    /// Where along a `pattern` new particles go (0 = its start, 1 = its end).
+    pub period: Range,
+    /// The size of a `pattern` (`DrawScale`).
+    pub draw_scale: f32,
 }
 
 impl Settings {
@@ -148,6 +155,9 @@ impl Settings {
                 4 => Blend::Modulated,
                 _ => Blend::Translucent,
             },
+            uniform: p.byte("Distribution", 0) == 1,
+            period: range(p, "Period"),
+            draw_scale: p.f32("DrawScale", 1.0),
         }
     }
 }
@@ -206,6 +216,8 @@ pub struct System {
     emitted: u32,
     last: Option<Vec3>,
     rng: Rng,
+    /// A pattern to spread the particles over (`Pattern`), in the system's side/up plane.
+    pub pattern: Option<Pattern>,
 }
 
 /// Fraction of the way through a change that starts `delay` seconds into a particle's life and
@@ -216,7 +228,15 @@ fn transition(age: f32, life: f32, delay: f32) -> f32 {
 
 impl System {
     pub fn new(settings: Settings, seed: u64) -> Self {
-        Self { settings, particles: Vec::new(), residue: 0.0, emitted: 0, last: None, rng: Rng(seed | 1) }
+        Self {
+            settings,
+            particles: Vec::new(),
+            residue: 0.0,
+            emitted: 0,
+            last: None,
+            rng: Rng(seed | 1),
+            pattern: None,
+        }
     }
 
     pub fn from_props(p: &ActorProps, seed: u64) -> Self {
@@ -241,14 +261,16 @@ impl System {
         Vec3::new(ch(0), ch(1), ch(2))
     }
 
-    fn emit(&mut self, place: &Place, at: Vec3, pre_age: f32) {
+    /// Emits one particle at `at`, moved by `shift` in the system's own axes.
+    fn emit(&mut self, place: &Place, at: Vec3, shift: Vec3, pre_age: f32) {
         let s = self.settings.clone();
         let m = Mat3::from_mat4(rotator_matrix(place.rot[0], place.rot[1], place.rot[2]));
-        let offset = Vec3::new(
-            (self.frand() - 0.5) * self.pick(s.source[0]),
-            (self.frand() - 0.5) * self.pick(s.source[1]),
-            (self.frand() - 0.5) * self.pick(s.source[2]),
-        );
+        let offset = shift
+            + Vec3::new(
+                (self.frand() - 0.5) * self.pick(s.source[0]),
+                (self.frand() - 0.5) * self.pick(s.source[1]),
+                (self.frand() - 0.5) * self.pick(s.source[2]),
+            );
         let mut pos = m * offset;
         if !s.system_relative {
             pos += at;
@@ -333,7 +355,16 @@ impl System {
             // ParentBlend fades a system out; scripts set it to 1 to switch one off.
             let blend = s.parent_blend.clamp(0.0, 1.0);
             let rate = self.pick(self.settings.per_sec).max(0.0) * (1.0 - blend);
-            self.residue += rate * dt;
+            let (period, scale) = (self.settings.period, self.settings.draw_scale);
+            // Our rule: a uniform system emits at least `rate` particles per particle width of
+            // the way its emitting point covered (along the pattern, or as the system moved).
+            let way = match &self.pattern {
+                Some(p) => p.length() * period.rand.clamp(0.0, 1.0) * scale,
+                None => last.distance(place.pos),
+            };
+            let (uniform, width) = (self.settings.uniform, self.settings.width.base);
+            let by_way = if uniform { rate * way / width.max(0.01) } else { 0.0 };
+            self.residue += (rate * dt).max(by_way);
             let mut count = self.residue as u32;
             self.residue -= count as f32;
             count = count.min(500);
@@ -342,10 +373,25 @@ impl System {
             }
             // New particles are spread along the way the system moved this tick, and over the
             // tick's time.
+            let pattern = self.pattern.take();
+            // A pattern's stretch past its end places nothing.
+            if pattern.is_some() && period.base > 1.0 {
+                count = 0;
+            }
             for i in 0..count {
                 let t = if count > 1 { i as f32 / (count - 1) as f32 } else { 1.0 };
-                self.emit(place, last.lerp(place.pos, t), dt * (1.0 - t));
+                let (at, shift) = match &pattern {
+                    None => (last.lerp(place.pos, t), Vec3::ZERO),
+                    Some(p) => {
+                        // Evenly along the stretch for uniform systems, else anywhere in it.
+                        let along = if uniform { t } else { self.frand() };
+                        let at = p.along(period.base + period.rand * along);
+                        (place.pos, Vec3::new(0.0, (at.x - 0.5) * scale, (0.5 - at.y) * scale))
+                    }
+                };
+                self.emit(place, at, shift, dt * (1.0 - t));
             }
+            self.pattern = pattern;
         }
         self.last = Some(place.pos);
         let alive = self.settings.max_alive;
@@ -354,6 +400,12 @@ impl System {
             self.particles.drain(..extra);
         }
         !(max > 0 && self.emitted >= max && self.particles.is_empty())
+    }
+
+    /// Starts the next emission from where the system is then, not from where it was (as
+    /// scripts do by setting `LastEmitLocation`).
+    pub fn restart_trail(&mut self) {
+        self.last = None;
     }
 
     /// Lets the system run out: no more particles, then gone (`Shutdown`).
@@ -471,6 +523,9 @@ mod tests {
             primitive: Primitive::Billboard,
             emit: true,
             blend: Blend::Translucent,
+            uniform: false,
+            period: zero,
+            draw_scale: 1.0,
         }
     }
 

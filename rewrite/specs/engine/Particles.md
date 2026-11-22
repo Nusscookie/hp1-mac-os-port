@@ -52,9 +52,24 @@ A placed system starts with the `EmissionResidue` and `ParticlesEmitted` saved i
   camera. Everything else is drawn as a square facing the camera, turned by the particle's
   spin. Texture corners: (0,0) at −side −up, (1,1) at +side +up.
 
+## Patterns and uniform spreading — OUR OWN RULE, NOT THE ORIGINAL'S
+Spell lessons give systems a `Pattern` (a spell's gesture), a `DrawScale` and a `Period`, and
+their sparkle presets use the uniform `Distribution` with only 2–3 particles a second.
+SurrealEngine ignores all four, and the original code is lost. Here:
+- With a pattern, each new particle starts on the pattern instead of at the system's place. Its
+  spot is a part of the way along the pattern picked from `Period` like any setting
+  (base + rand × 0..1). The spot is in the system's side/up plane: the pattern's x goes to the
+  side and its y downwards, centred on the system and `DrawScale` across. Once `Period`'s
+  base is past 1 (the pattern's end), nothing is emitted. The pattern's x to
+  the side and y down follows a commented-out line in the template script.
+- A uniform system emits at least its rate (particles a second) × its way ÷ its particle width
+  (`SizeWidth` base). Its way is the stretch of the pattern `Period` covers (rand × the
+  pattern's length × `DrawScale`), or else how far the system moved in the tick. Its particles
+  are spread evenly along that way. So a moving sparkle trail and a template drawn along its
+  pattern read as lines, as in the original's look. A rate of 0 still switches it off.
+
 ## Open points
-- `bPrime`, `bSteadyState`, `Period`, `Decay`, `DripTime`, `Elasticity`, `Distribution`,
-  `Pattern`, wind, `ColorPalette` and the liquid / shard / tri-tube primitives are not
+- `bPrime`, `bSteadyState`, `Decay`, `DripTime`, `Elasticity`, wind, `ColorPalette` and the liquid / shard / tri-tube primitives are not
   handled (SurrealEngine doesn't either).
 - Animated particle textures show their first frame.
 - Zone gravity is the default zone's for every zone.

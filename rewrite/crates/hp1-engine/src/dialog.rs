@@ -9,6 +9,10 @@ pub trait Lines {
     fn text(&self, id: &str) -> String;
     /// The voice sound (path for `Output::Voice`) and its length in seconds, if there is one.
     fn voice(&mut self, id: &str) -> Option<(String, f32)>;
+    /// A string from a localized text file (`Localize(section, key, file)`), empty if missing.
+    fn localized(&self, _file: &str, _section: &str, _key: &str) -> String {
+        String::new()
+    }
 }
 
 /// No text and no voices (tests, or data without dialogue).

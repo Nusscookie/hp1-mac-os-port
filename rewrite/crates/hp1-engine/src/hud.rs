@@ -174,6 +174,8 @@ pub struct HudFonts {
     pub small: Font,
     /// The font set up for the whole HUD (`MedInkFont`), which the counters' numbers use.
     pub numbers: Font,
+    /// The console's big font (lesson popups).
+    pub big: Font,
 }
 
 impl HudFonts {
@@ -182,6 +184,14 @@ impl HudFonts {
         match language.to_ascii_uppercase().as_str() {
             "ENG" | "INT" | "POL" => ("HPBase.MedInkFont", "HPBase.SmallInkFont"),
             _ => ("HPBase.SmallInkFont", "HPBase.TinyInkFont"),
+        }
+    }
+
+    /// The console's big font for a language code.
+    pub fn big_name(language: &str) -> &'static str {
+        match language.to_ascii_uppercase().as_str() {
+            "ENG" | "INT" | "POL" => "HPBase.HugeInkFont",
+            _ => "HPBase.BigInkFont",
         }
     }
 
@@ -272,6 +282,42 @@ pub struct Hud {
     /// `ToggleDialog`: whether the text of spoken lines is shown.
     pub show_dialog: bool,
     beans: Counter,
+    /// The countdown bar (spell lessons).
+    pub countdown: Option<Countdown>,
+    /// A popup drawn over everything, even in cutscene mode.
+    pub popup: Option<Popup>,
+    /// Harry's lesson grade (`LessonScore`; None = not graded yet) and pass mark (`LessonPass`).
+    pub lesson_score: Option<f32>,
+    pub lesson_pass: f32,
+    /// The grade counting up: time left and total.
+    pub score_count: Option<(f32, f32)>,
+}
+
+pub const TIMER_FULL: &str = "HPBase.Icons.TimerBarFull";
+pub const TIMER_EMPTY: &str = "HPBase.Icons.TimerBarEmpty";
+
+/// The HUD countdown (`StartCountdown`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Countdown {
+    pub left: f32,
+    pub start: f32,
+    /// Time left at the last tick sound.
+    last_tick: f32,
+}
+
+impl Countdown {
+    pub fn new(seconds: f32) -> Self {
+        Self { left: seconds, start: seconds, last_tick: 0.0 }
+    }
+}
+
+/// The lesson popups, with their texts (from `Pickup`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Popup {
+    /// "Grade: N%" and "Pass Mark: M%".
+    Grade { grade: String, pass: String },
+    /// "Lesson Score R/4" and the house points won.
+    Final { title: String, rounds: usize, points: String },
 }
 
 impl Default for Hud {
@@ -286,7 +332,17 @@ pub const BORDER_TEXTURE: &str = "HPBase.Icons.leftPanel";
 impl Hud {
     /// The HUD with its counters' settings from the converted classes.
     pub fn new(classes: &ClassTable) -> Self {
-        Self { border: 0.0, message: None, show_dialog: true, beans: Counter::beans(classes) }
+        Self {
+            border: 0.0,
+            message: None,
+            show_dialog: true,
+            beans: Counter::beans(classes),
+            countdown: None,
+            popup: None,
+            lesson_score: None,
+            lesson_pass: 0.0,
+            score_count: None,
+        }
     }
 
     /// Shows the bean counter for 5 s.
@@ -304,15 +360,39 @@ impl Hud {
         self.message.as_ref().map(|m| m.text.as_str())
     }
 
-    /// One game tick.
-    pub fn tick(&mut self, dt: f32) {
+    /// One game tick; gives a sound to play from Harry (at half volume), if any.
+    pub fn tick(&mut self, dt: f32, cut_mode: bool) -> Option<&'static str> {
         self.beans.tick(dt);
+        if let Some((left, _)) = &mut self.score_count {
+            *left -= dt;
+            if *left <= 0.0 {
+                self.score_count = None;
+            }
+        }
+        let mut sound = None;
+        if let Some(c) = &mut self.countdown {
+            c.left = (c.left - dt).max(0.0);
+            // The original plays the ticks while drawing the bar, which it does outside cutscene
+            // mode only.
+            if !cut_mode && (c.last_tick - c.left).abs() > 1.0 {
+                c.last_tick = c.left;
+                sound = Some(match c.left {
+                    t if t > 30.0 => "HPSounds.menu_sfx.timer_1",
+                    t if t > 20.0 => "HPSounds.menu_sfx.timer_2",
+                    t if t > 15.0 => "HPSounds.menu_sfx.timer_3",
+                    t if t > 10.0 => "HPSounds.menu_sfx.timer_4",
+                    t if t > 5.0 => "HPSounds.menu_sfx.timer_5",
+                    _ => "HPSounds.menu_sfx.timer_6",
+                });
+            }
+        }
         if let Some(m) = &mut self.message {
             m.left -= dt;
             if m.left < 0.0 {
                 self.message = None;
             }
         }
+        sound
     }
 
     /// One drawn frame on a `w` × `h` screen: moves the bars and returns what to draw.
@@ -360,8 +440,66 @@ impl Hud {
         self.draw_beans(w, stats, fonts, size_of, &mut out);
         if !cut_mode {
             draw_health(stats, size_of, &mut out);
+            self.draw_countdown([w, h], size_of, &mut out);
+        }
+        if let Some(fonts) = fonts {
+            self.draw_popup([w, h], &fonts.big, &mut out);
         }
         out
+    }
+
+    fn draw_countdown(&self, [w, h]: [f32; 2], size_of: &mut SizeOf, out: &mut Vec<Tile>) {
+        let Some(c) = &self.countdown else { return };
+        let Some((fw, fh)) = size_of(TIMER_FULL) else { return };
+        let (x, y) = (w - fw - 8.0, h - 160.0);
+        icon(TIMER_EMPTY, x, y, size_of, out);
+        let part = if c.start > 0.0 { c.left / c.start } else { 0.0 };
+        let shown = (fw - 97.0) * part + 97.0;
+        out.push(Tile {
+            texture: TIMER_FULL.to_owned(),
+            x,
+            y,
+            w: shown,
+            h: fh,
+            src: [0.0, 0.0, shown, fh],
+            color: [1.0; 4],
+            style: Style::Normal,
+        });
+    }
+
+    /// The grade as the popup shows it: whole percent, counting up while the replay runs.
+    pub fn shown_grade(&self) -> Option<i32> {
+        let score = self.lesson_score?;
+        let mut n = (score * 100.0) as i32;
+        if let Some((left, max)) = self.score_count
+            && max > 0.0
+        {
+            n = (n as f32 * (max - left) / max) as i32;
+        }
+        Some(n)
+    }
+
+    fn draw_popup(&self, [w, h]: [f32; 2], font: &Font, out: &mut Vec<Tile>) {
+        let yellow = [1.0, 1.0, 0.0, 1.0];
+        // Centred on the label alone; the number is added after it, as in the original.
+        let centred = |label: &str| ((w / 2.0) - font.text_size(label).0 / 2.0).trunc();
+        match &self.popup {
+            None => {}
+            Some(Popup::Grade { grade, pass }) => {
+                let pass_text = format!("{pass} {}%", (self.lesson_pass * 100.0) as i32);
+                match self.shown_grade().filter(|_| self.lesson_score.is_some_and(|s| s >= 0.0)) {
+                    Some(n) => {
+                        font.draw(&format!("{grade} {n}%"), centred(grade), h - 80.0, w, yellow, out);
+                        font.draw(&pass_text, centred(pass), h - 48.0, w, yellow, out);
+                    }
+                    None => font.draw(&pass_text, 32.0, h - 48.0, w, yellow, out),
+                }
+            }
+            Some(Popup::Final { title, rounds, points }) => {
+                font.draw(&format!("{title} {rounds}/4"), centred(title), (h / 2.0) - 40.0, w, yellow, out);
+                font.draw(points, centred(points), h / 2.0, w, yellow, out);
+            }
+        }
     }
 
     fn draw_beans(
@@ -444,8 +582,8 @@ mod tests {
 
     #[test]
     fn bars_slide_in_for_a_line_and_out_after_it() {
-        let fonts = HudFonts { message: font(), small: font(), numbers: font() };
-        let stats = Stats { beans: 0, health: 50.0, max_health: 50.0 };
+        let fonts = HudFonts { message: font(), small: font(), numbers: font(), big: font() };
+        let stats = Stats { beans: 0, health: 50.0, max_health: 50.0, house_points: 0 };
         let mut hud = Hud::default();
         hud.show_line("HI", 0.5);
         let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut |_| None);
@@ -453,7 +591,7 @@ mod tests {
         assert_eq!(tiles[0].h, 12.0);
         // Centred: (640 - 16) / 2.
         assert_eq!((tiles[2].x, tiles[2].y), (312.0, 480.0 - 12.0 + 1.0));
-        hud.tick(0.6);
+        hud.tick(0.6, false);
         assert!(hud.line().is_none());
         let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut |_| None);
         assert!((tiles[0].h - 9.6).abs() < 1e-4);
@@ -462,8 +600,8 @@ mod tests {
 
     #[test]
     fn the_bean_counter_slides_in_and_health_shows_outside_cutscenes() {
-        let fonts = HudFonts { message: font(), small: font(), numbers: font() };
-        let mut stats = Stats { beans: 10, health: 25.0, max_health: 50.0 };
+        let fonts = HudFonts { message: font(), small: font(), numbers: font(), big: font() };
+        let mut stats = Stats { beans: 10, health: 25.0, max_health: 50.0, house_points: 0 };
         let mut hud = Hud::default();
         hud.beans.image = "Test.Counter".into();
         hud.beans.piles = (1..=4).map(|i| format!("Test.Beans{i}")).collect();
@@ -472,7 +610,7 @@ mod tests {
         let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut size);
         assert!(tiles.iter().all(|t| !t.texture.starts_with("Test.")));
         hud.show_beans();
-        hud.tick(0.1);
+        hud.tick(0.1, false);
         // A fifth of the way from -128 to 4.
         assert!((hud.beans.y - (-128.0 + 132.0 / 5.0)).abs() < 1e-4);
         let tiles = hud.draw([640.0, 480.0], false, &stats, Some(&fonts), &mut size);
@@ -491,7 +629,7 @@ mod tests {
         let tiles = hud.draw([640.0, 480.0], true, &stats, Some(&fonts), &mut size);
         assert!(tiles.iter().all(|t| t.texture != HEALTH_FULL));
         for _ in 0..200 {
-            hud.tick(0.05);
+            hud.tick(0.05, false);
         }
         assert!(hud.beans.y < -127.0);
     }

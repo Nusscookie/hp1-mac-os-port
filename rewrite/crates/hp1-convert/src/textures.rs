@@ -62,6 +62,23 @@ fn convert_package(conv: &Converter, pkg: &Arc<Package>) -> SectionReport {
     SectionReport { items: count, errors, warnings }
 }
 
+/// An ice texture shows its source texture's pixels in its own palette (as SurrealEngine does;
+/// the moving glass layer is not drawn).
+fn ice_source(
+    conv: &Converter,
+    pkg: &Arc<Package>,
+    tex: &ue1_read::texture::Texture,
+    w: u32,
+    h: u32,
+    colors: Option<&[[u8; 4]]>,
+) -> Option<Vec<u8>> {
+    let src = conv.lib.resolve(pkg, tex.props.object("SourceTexture")?).ok()??;
+    let src = read_texture(&src.package, src.export).ok()?;
+    let mip =
+        src.mips.first().filter(|m| m.width == w && m.height == h && src.format == TextureFormat::P8)?;
+    mip_to_rgba(TextureFormat::P8, mip, colors).ok()
+}
+
 fn convert_one(
     conv: &Converter,
     pkg: &Arc<Package>,
@@ -106,7 +123,9 @@ fn convert_one(
             // Procedural textures can ship with no pixels; the game draws them every frame.
             let w = tex.props.int("UClamp").or(tex.props.byte("UBits").map(|b| 1 << b)).unwrap_or(64) as u32;
             let h = tex.props.int("VClamp").or(tex.props.byte("VBits").map(|b| 1 << b)).unwrap_or(64) as u32;
-            (w, h, vec![0; (w * h * 4) as usize])
+            let ice = pkg.class_name(&pkg.exports[index]).eq_ignore_ascii_case("IceTexture");
+            let pixels = if ice { ice_source(conv, pkg, &tex, w, h, colors.as_deref()) } else { None };
+            (w, h, pixels.unwrap_or_else(|| vec![0; (w * h * 4) as usize]))
         }
         _ => return Err("texture has no image data".into()),
     };
